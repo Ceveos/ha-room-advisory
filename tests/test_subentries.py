@@ -1,8 +1,7 @@
 """Tests for adding, renaming, moving and removing rooms.
 
-A room is a config subentry. The stored shape is the one thing that cannot be
-refactored after people have installed the integration, so it is pinned here
-explicitly rather than asserted loosely.
+A room is a config subentry. Its stored shape is pinned explicitly here because
+it cannot be changed once people have the integration installed.
 """
 
 from __future__ import annotations
@@ -101,11 +100,7 @@ async def test_a_room_may_be_named_instead_of_its_area(
 async def test_a_room_need_not_have_an_area(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A room that matches no single area can still be created.
-
-    The PRD says a room *normally* maps to an area. Naming one directly is the
-    escape hatch for a space that does not line up with exactly one.
-    """
+    """A room that matches no single area can still be created."""
     await _setup_hub(hass, config_entry)
 
     subentry_id = await _add_room(hass, config_entry, name="Great Room")
@@ -156,10 +151,10 @@ async def test_add_room_for_a_deleted_area_is_an_error(
 async def test_two_rooms_may_share_an_area(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """An area is a starting point, not an exclusive claim.
+    """An area may hold more than one room.
 
-    The area only seeds entity candidates, so one large area holding two
-    advisory spaces is a legitimate setup rather than a mistake to block.
+    The area only seeds entity candidates, so one large area covering two
+    advisory spaces is a valid setup.
     """
     area = ar.async_get(hass).async_create("Basement")
     await _setup_hub(hass, config_entry)
@@ -188,13 +183,55 @@ async def test_add_room_creates_a_device_in_the_area(
     assert device.config_entries_subentries[config_entry.entry_id] == {subentry_id}
 
 
+async def test_the_configured_area_wins_over_a_manual_device_move(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A room that names an area keeps its device there.
+
+    The area is a room setting, so it is the place to change it.
+    """
+    area_registry = ar.async_get(hass)
+    office = area_registry.async_create("Office")
+    spare = area_registry.async_create("Spare room")
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, area_id=office.id)
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+
+    dr.async_get(hass).async_update_device(device.id, area_id=spare.id)
+    assert await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+    assert device.area_id == office.id
+
+
+async def test_a_room_without_an_area_keeps_a_manual_placement(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A room that names no area is left wherever the user files its device."""
+    area = ar.async_get(hass).async_create("Spare room")
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, name="Great Room")
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+
+    dr.async_get(hass).async_update_device(device.id, area_id=area.id)
+    assert await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+    assert device.area_id == area.id
+
+
 async def test_reconfigure_renames_the_room_but_keeps_its_identity(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """Renaming a room keeps the subentry and its device.
+    """Renaming a room keeps its subentry and device.
 
-    The subentry id is the room's identity, so advice published for the room
-    keeps its entity ids across a rename.
+    The subentry id is the room's identity, so its entities are unaffected.
     """
     area = ar.async_get(hass).async_create("Office")
     await _setup_hub(hass, config_entry)
@@ -274,11 +311,10 @@ async def test_reconfigure_rejects_an_empty_name_without_an_area(
 async def test_deleting_the_area_does_not_leave_the_device_pointing_at_it(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A deleted area is treated as no area rather than written back.
+    """A deleted area counts as no area.
 
-    Home Assistant clears the device's area when an area is deleted. Restoring
-    the stored id on the next reload would undo that and leave the device
-    filed under an area that no longer exists.
+    Home Assistant clears the device's area when the area is deleted; the
+    stored id must not be written back on the next reload.
     """
     area_registry = ar.async_get(hass)
     area = area_registry.async_create("Office")
@@ -333,11 +369,7 @@ async def test_rooms_survive_a_reload(
 async def test_a_non_room_subentry_gets_no_device(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """Only room subentries become devices.
-
-    Nothing else creates subentries yet, so this pins the guard rather than an
-    existing behaviour: a future subentry type must opt in to a device.
-    """
+    """Only room subentries become devices."""
     config_entry.add_to_hass(hass)
     hass.config_entries.async_add_subentry(
         config_entry,

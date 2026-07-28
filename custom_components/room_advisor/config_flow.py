@@ -46,8 +46,7 @@ class RoomAdvisorConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> dict[str, type[ConfigSubentryFlow]]:
         """Return the subentry types the hub supports.
 
-        The signature is set by Home Assistant; the entry is unused because
-        every hub supports rooms.
+        ``config_entry`` is unused: every hub supports rooms.
         """
         return {SUBENTRY_TYPE_ROOM: RoomSubentryFlow}
 
@@ -56,8 +55,8 @@ class RoomAdvisorConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Create the hub entry.
 
-        The shared inputs and thresholds the hub holds are all optional and are
-        asked for here; the fields themselves land with the configuration work.
+        The hub's shared inputs and thresholds are all optional, so there is
+        nothing to ask for yet.
         """
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=vol.Schema({}))
@@ -68,11 +67,9 @@ class RoomAdvisorConfigFlow(ConfigFlow, domain=DOMAIN):
 class RoomSubentryFlow(ConfigSubentryFlow):
     """Add, rename or move a room.
 
-    A room is a name plus, usually, an area. The area is a convenience: it
-    seeds the room's entity candidates and places the room's device. It is not
-    the room's identity, so a room can be renamed or moved without disturbing
-    anything already pointing at it, and a room that does not correspond to any
-    single area can be created by naming it and leaving the area empty.
+    A room is a name plus, optionally, an area. The area seeds the room's
+    entity candidates and files its device; it is not the room's identity, so
+    renaming or moving a room leaves its entities alone.
     """
 
     async def async_step_user(
@@ -120,10 +117,9 @@ class RoomSubentryFlow(ConfigSubentryFlow):
     def _validate(
         self, user_input: dict[str, Any]
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        """Resolve a room from what the user submitted.
+        """Resolve a room from the submitted form.
 
-        A room needs a name. Naming it after its area is the common case, so an
-        empty name falls back to the area's name rather than being rejected.
+        An empty name falls back to the area's name.
         """
         errors: dict[str, str] = {}
         area_id: str | None = user_input.get(CONF_AREA_ID)

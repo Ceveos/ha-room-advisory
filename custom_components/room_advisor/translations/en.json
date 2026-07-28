@@ -20,25 +20,25 @@
       "step": {
         "user": {
           "title": "Add a room",
-          "description": "Pick the area this room covers. Room Advisor suggests the entities already assigned to it, and you confirm them in a later step.\n\nA room does not have to match an area. If yours does not, leave the area empty and just give it a name.",
+          "description": "Pick the area this room covers and Room Advisor will suggest its entities. If the room does not match a single area, leave this empty and give the room a name instead.",
           "data": {
             "area_id": "Area",
             "name": "Name"
           },
           "data_description": {
-            "area_id": "Used to suggest this room's entities and to file its device. Nothing reads it afterwards.",
+            "area_id": "Used to suggest this room's entities and to file its device.",
             "name": "Leave empty to name the room after its area."
           }
         },
         "reconfigure": {
           "title": "Rename or move room",
-          "description": "Rename this room, or point it at a different area. Its advice keeps the same entity IDs either way, so anything already using them keeps working.",
+          "description": "Rename this room, or point it at a different area. Its entity IDs do not change.",
           "data": {
             "area_id": "Area",
             "name": "Name"
           },
           "data_description": {
-            "area_id": "Used to suggest this room's entities and to file its device. Nothing reads it afterwards.",
+            "area_id": "Used to suggest this room's entities and to file its device.",
             "name": "Leave empty to name the room after its area."
           }
         }

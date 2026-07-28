@@ -38,24 +38,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _async_config_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload when the hub or any room changes.
 
-    Adding, reconfiguring and removing a room all fire this. Reloading rather
-    than patching state in place means there is one path that builds a room
-    from its configuration, so a running instance and a freshly started one
-    cannot disagree.
+    Adding, renaming and removing a room all fire this.
     """
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 def _async_register_room_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Give every room a device.
+    """Give every room a device, filed in its area if it has one.
 
-    A room that names an area is placed in it. A room without one is left where
-    it is, so the user can file it themselves. An area the user has since
-    deleted is treated as no area at all rather than written back, which would
-    undo Home Assistant's own cleanup and leave the device pointing at nothing.
-
-    Removing a room needs no counterpart here: Home Assistant clears devices and
-    entities belonging to a subentry when the subentry goes.
+    An area the user has deleted counts as no area: Home Assistant clears the
+    device's area when the area goes, and writing the stored id back would undo
+    that. Removing a room needs no counterpart here for the same reason — Home
+    Assistant clears a subentry's devices and entities along with the subentry.
     """
     area_registry = ar.async_get(hass)
     device_registry = dr.async_get(hass)

@@ -23,8 +23,7 @@ def auto_enable_custom_integrations(
 def config_entry() -> MockConfigEntry:
     """Return a Room Advisor hub config entry with no rooms.
 
-    The hub itself stores nothing yet — its shared inputs and default
-    thresholds land with the configuration work. Rooms are subentries, so
-    tests that need one add it through the subentry flow.
+    Rooms are subentries, so tests that need one add it through the subentry
+    flow.
     """
     return MockConfigEntry(domain=DOMAIN, title="Room Advisor", data={})

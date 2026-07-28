@@ -32,9 +32,8 @@ async def test_unload_entry(hass: HomeAssistant, config_entry: MockConfigEntry) 
 async def test_reload_entry(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
     """A config entry survives a reload.
 
-    Reload is the operation every later PR relies on — the coordinator, the
-    config flow and the room subentries are all re-derived from current state
-    on reload rather than from anything persisted.
+    Everything is rebuilt from configuration on reload rather than from
+    anything persisted.
     """
     config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
