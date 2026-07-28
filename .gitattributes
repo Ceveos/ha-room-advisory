@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Shell scripts run inside Linux containers. Checking them out with CRLF on
+# Windows makes bash fail on the carriage return.
+scripts/* text eol=lf
+*.sh text eol=lf

@@ -13,8 +13,12 @@ coverage.xml
 htmlcov/
 
 # Editors
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 .idea/
+
+# Home Assistant instance created by scripts/develop
+/config/
 
 # Private design documents. Deliberately not published: these are working
 # documents, and the README and code are expected to stand on their own.
