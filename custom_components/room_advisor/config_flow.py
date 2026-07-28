@@ -17,14 +17,19 @@ from homeassistant.config_entries import (
     ConfigSubentryFlow,
     SubentryFlowResult,
 )
+from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.helpers import area_registry as ar
-from homeassistant.helpers.selector import AreaSelector
+from homeassistant.helpers.selector import AreaSelector, TextSelector
 
 from .const import CONF_AREA_ID, DOMAIN, NAME, SUBENTRY_TYPE_ROOM
 
-ROOM_SCHEMA = vol.Schema({vol.Required(CONF_AREA_ID): AreaSelector()})
+ROOM_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_AREA_ID): AreaSelector(),
+        vol.Optional(CONF_NAME): TextSelector(),
+    }
+)
 
 
 class RoomAdvisorConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -61,11 +66,13 @@ class RoomAdvisorConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class RoomSubentryFlow(ConfigSubentryFlow):
-    """Add or reconfigure a room.
+    """Add, rename or move a room.
 
-    A room is anchored to an area. The area is what lets Room Advisor find the
-    room's existing entities, and it is the only thing asked for here — every
-    other setting is inherited from the hub until the room overrides it.
+    A room is a name plus, usually, an area. The area is a convenience: it
+    seeds the room's entity candidates and places the room's device. It is not
+    the room's identity, so a room can be renamed or moved without disturbing
+    anything already pointing at it, and a room that does not correspond to any
+    single area can be created by naming it and leaving the area empty.
     """
 
     async def async_step_user(
@@ -75,41 +82,61 @@ class RoomSubentryFlow(ConfigSubentryFlow):
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=ROOM_SCHEMA)
 
-        area_id: str = user_input[CONF_AREA_ID]
-        return self.async_create_entry(
-            title=self._area_name(area_id),
-            data={CONF_AREA_ID: area_id},
-            unique_id=area_id,
-        )
+        room, errors = self._validate(user_input)
+        if errors:
+            return self._show_form("user", user_input, errors)
+
+        return self.async_create_entry(title=room[CONF_NAME], data=room)
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Move an existing room to a different area.
+        """Rename a room or move it to a different area.
 
         The room keeps its subentry id, so its advice keeps its entity ids.
         """
         subentry = self._get_reconfigure_subentry()
         if user_input is None:
-            return self.async_show_form(
-                step_id="reconfigure",
-                data_schema=self.add_suggested_values_to_schema(
-                    ROOM_SCHEMA, subentry.data
-                ),
-            )
+            return self._show_form("reconfigure", dict(subentry.data), {})
 
-        area_id: str = user_input[CONF_AREA_ID]
+        room, errors = self._validate(user_input)
+        if errors:
+            return self._show_form("reconfigure", user_input, errors)
+
         return self.async_update_and_abort(
-            self._get_entry(),
-            subentry,
-            title=self._area_name(area_id),
-            data={CONF_AREA_ID: area_id},
-            unique_id=area_id,
+            self._get_entry(), subentry, title=room[CONF_NAME], data=room
         )
 
-    def _area_name(self, area_id: str) -> str:
-        """Return the name of an area, or abort if it has gone away."""
-        area = ar.async_get(self.hass).async_get_area(area_id)
-        if area is None:
-            raise AbortFlow("unknown_area")
-        return area.name
+    def _show_form(
+        self, step_id: str, values: dict[str, Any], errors: dict[str, str]
+    ) -> SubentryFlowResult:
+        """Re-show a step with what the user submitted still in place."""
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=self.add_suggested_values_to_schema(ROOM_SCHEMA, values),
+            errors=errors,
+        )
+
+    def _validate(
+        self, user_input: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        """Resolve a room from what the user submitted.
+
+        A room needs a name. Naming it after its area is the common case, so an
+        empty name falls back to the area's name rather than being rejected.
+        """
+        errors: dict[str, str] = {}
+        area_id: str | None = user_input.get(CONF_AREA_ID)
+        name = str(user_input.get(CONF_NAME) or "").strip()
+
+        if area_id is not None:
+            area = ar.async_get(self.hass).async_get_area(area_id)
+            if area is None:
+                errors[CONF_AREA_ID] = "unknown_area"
+            elif not name:
+                name = area.name
+
+        if not name and not errors:
+            errors[CONF_NAME] = "name_required"
+
+        return {CONF_NAME: name, CONF_AREA_ID: area_id}, errors

@@ -19,6 +19,13 @@ a room keeps its entity ids when the room is reconfigured.
 """
 
 CONF_AREA_ID: Final = "area_id"
+"""The area a room is drawn from, if any.
+
+A convenience rather than an identity. It seeds the room's entity candidates
+and places the room's device, and nothing reads it once the room's entities
+have been chosen. Optional, because a room need not line up with exactly one
+area.
+"""
 
 PLATFORMS: Final[tuple[Platform, ...]] = ()
 """Platforms forwarded on setup.

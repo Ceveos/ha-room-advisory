@@ -15,34 +15,40 @@
       "entry_type": "Room",
       "initiate_flow": {
         "user": "Add room",
-        "reconfigure": "Move room to another area"
+        "reconfigure": "Rename or move room"
       },
       "step": {
         "user": {
           "title": "Add a room",
-          "description": "Pick the area this room covers. Room Advisor reads the entities already assigned to that area, so there is nothing else to wire up.",
+          "description": "Pick the area this room covers. Room Advisor suggests the entities already assigned to it, and you confirm them in a later step.\n\nA room does not have to match an area. If yours does not, leave the area empty and just give it a name.",
           "data": {
-            "area_id": "Area"
+            "area_id": "Area",
+            "name": "Name"
           },
           "data_description": {
-            "area_id": "Each area can be added once. The room takes its name from the area."
+            "area_id": "Used to suggest this room's entities and to file its device. Nothing reads it afterwards.",
+            "name": "Leave empty to name the room after its area."
           }
         },
         "reconfigure": {
-          "title": "Move room to another area",
-          "description": "Point this room at a different area. Its advice keeps the same entity IDs, so anything already using them keeps working.",
+          "title": "Rename or move room",
+          "description": "Rename this room, or point it at a different area. Its advice keeps the same entity IDs either way, so anything already using them keeps working.",
           "data": {
-            "area_id": "Area"
+            "area_id": "Area",
+            "name": "Name"
           },
           "data_description": {
-            "area_id": "Each area can be added once."
+            "area_id": "Used to suggest this room's entities and to file its device. Nothing reads it afterwards.",
+            "name": "Leave empty to name the room after its area."
           }
         }
       },
+      "error": {
+        "unknown_area": "That area no longer exists. Pick another one, or leave it empty and name the room yourself.",
+        "name_required": "Give the room a name, or pick an area to name it after."
+      },
       "abort": {
-        "already_configured": "That area is already set up as a room.",
-        "unknown_area": "That area no longer exists.",
-        "reconfigure_successful": "Room moved."
+        "reconfigure_successful": "Room updated."
       }
     }
   }
