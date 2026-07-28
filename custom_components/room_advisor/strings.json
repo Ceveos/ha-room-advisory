@@ -3,11 +3,11 @@
     "step": {
       "user": {
         "title": "Room Advisor",
-        "description": "Room Advisor publishes what is advisable in each room, and why. It never performs the action itself.\n\nAdd your rooms after setup."
+        "description": "Room Advisor publishes what is advisable in each room, and why. It never performs the action itself.\n\nThis hub holds your house-wide settings: the shared outdoor sensors and the default thresholds that every room inherits. Add your rooms, and choose those shared inputs, after setup."
       }
     },
     "abort": {
-      "single_instance_allowed": "Already configured. Only a single Room Advisor hub is possible; add each room to the existing hub."
+      "single_instance_allowed": "Already configured. There is one Room Advisor hub per house; add each room to the existing hub."
     }
   }
 }
