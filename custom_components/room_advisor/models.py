@@ -107,9 +107,14 @@ class UnusableObservationError(LookupError):
         self.reason = reason
 
 
-def _read_only(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Return a mapping the caller cannot mutate through its own reference."""
-    return MappingProxyType(dict(mapping))
+def _copied(mapping: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Copy a mapping so the caller's later edits cannot reach it.
+
+    A plain `dict` rather than a read-only view, so these structures stay
+    serialisable and copyable. The `Mapping` annotation is what keeps callers
+    from writing to them.
+    """
+    return dict(mapping)
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,16 +128,19 @@ class Observation:
     source_entity_id: str | None
 
     def __post_init__(self) -> None:
-        """Reject an observation that is unusable yet still carries a value."""
+        """Reject an observation whose value and reason disagree.
+
+        A usable observation without a value would be read as a real reading:
+        a guard would see `None`, find it falsy, and report `SATISFIED`.
+        """
+        if self.unusable_reason is None and self.value is None:
+            raise ValueError(_USABLE_WITHOUT_VALUE)
         if self.unusable_reason is not None and self.value is not None:
             raise ValueError(_UNUSABLE_WITH_VALUE)
 
     @property
     def usable(self) -> bool:
-        """Whether the value may be read.
-
-        Derived rather than stored, so it cannot contradict the reason.
-        """
+        """Whether the value may be read."""
         return self.unusable_reason is None
 
     @classmethod
@@ -173,6 +181,7 @@ class Observation:
 
 
 _UNUSABLE_WITH_VALUE: Final = "an unusable observation must not carry a value"
+_USABLE_WITHOUT_VALUE: Final = "a usable observation must carry a value"
 _GROUP_NOT_PARTITIONED: Final = (
     "known_on, known_off and unusable must partition configured"
 )
@@ -183,8 +192,8 @@ _ACTIVE_SINCE_MISMATCH: Final = "active_since must hold exactly the matching rul
 class GroupObservation:
     """A multi-entity input, such as a room's window contacts.
 
-    Membership is kept rather than reduced to a boolean, because advice to
-    close is permitted on partial information and advice to open is not.
+    Membership is kept rather than reduced to a boolean, so a rule can tell
+    which members it could read.
     """
 
     key: str
@@ -201,12 +210,11 @@ class GroupObservation:
 
     @property
     def usable(self) -> bool:
-        """Whether any member can be read.
+        """Whether at least one member can be read.
 
-        Deliberately permissive: this gates a rule running at all, and the
-        strict test lives in `all_usable_and_off`. Gating here on every member
-        being readable would let one dead contact silence the advice to close
-        a window that is visibly open.
+        Gates whether a rule runs at all. Opening rules additionally require
+        `all_usable_and_off`. False both for a group with no members and for
+        one whose members are all unreadable; `configured` tells them apart.
         """
         return bool(self.configured) and len(self.unusable) < len(self.configured)
 
@@ -219,9 +227,8 @@ class GroupObservation:
     def all_usable_and_off(self) -> bool:
         """Whether every member is readable and closed or dark.
 
-        False whenever any member is unusable. This is the basis every opening
-        rule consults, as a property rather than a rule-local check so it
-        cannot be right in one rule and wrong in another.
+        False whenever any member is unusable. This is what every opening rule
+        consults, so advice to open is never given on partial information.
         """
         return bool(self.configured) and not self.unusable and not self.known_on
 
@@ -263,13 +270,14 @@ class Observations(Mapping[str, Observation]):
     def usable(self, *keys: str) -> bool:
         """Whether every named key can be read.
 
-        Accepts group keys, for which usability is the group's own permissive
-        test. An unknown key is not usable rather than an error, so the runner
-        can gate on inputs a room never built.
+        Accepts group keys, for which usability is the group's own test. A key
+        the room never built is not usable, so a rule can be gated on an input
+        this room has no sensor for.
         """
         return all(self._is_usable(key) for key in keys)
 
     def _is_usable(self, key: str) -> bool:
+        """Prefer an observation over a group of the same name."""
         observation = self._observations.get(key)
         if observation is not None:
             return observation.usable
@@ -315,8 +323,10 @@ class Observations(Mapping[str, Observation]):
     def guard_when(self, key: str, blocking: Callable[[Any], bool]) -> GuardState:
         """Check a guard, `blocking` deciding what its reading means.
 
-        Raises `KeyError` for an unknown key. A mistyped guard key must not
-        read as an absent guard, because an absent guard is skipped.
+        Every guard key a rule may consult is present in the snapshot, an
+        unconfigured one carrying `NOT_CONFIGURED`. An unknown key is a
+        programming error and raises `KeyError`, because reading it as an
+        unconfigured guard would skip the guard instead.
         """
         observation = self._observations[key]
         if observation.unusable_reason is UnusableReason.NOT_CONFIGURED:
@@ -351,10 +361,10 @@ class Advisory:
         if self.action not in self.category.advisable_actions:
             raise InvalidAdvisoryError(self.category, self.action)
         object.__setattr__(
-            self, "reason_placeholders", _read_only(self.reason_placeholders)
+            self, "reason_placeholders", _copied(self.reason_placeholders)
         )
-        object.__setattr__(self, "source_entities", _read_only(self.source_entities))
-        object.__setattr__(self, "observations", _read_only(self.observations))
+        object.__setattr__(self, "source_entities", _copied(self.source_entities))
+        object.__setattr__(self, "observations", _copied(self.observations))
 
     def identity_in(self, room_subentry_id: str) -> AdvisoryIdentity:
         """Return this advisory's identity within a room."""
@@ -378,7 +388,7 @@ class ConditionState:
         """Reject timings that do not correspond to the matching conditions."""
         if set(self.active_since) != set(self.matching):
             raise ValueError(_ACTIVE_SINCE_MISMATCH)
-        object.__setattr__(self, "active_since", _read_only(self.active_since))
+        object.__setattr__(self, "active_since", _copied(self.active_since))
 
     def is_active(self, rule_id: str) -> bool:
         """Whether this condition matched the last evaluation."""

@@ -6,7 +6,9 @@ them the inner development loop for every layer built on top.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -135,6 +137,22 @@ def test_an_unusable_observation_may_not_carry_a_value() -> None:
             unusable_reason=UnusableReason.UNAVAILABLE,
             source_entity_id=None,
         )
+
+
+def test_a_usable_observation_must_carry_a_value() -> None:
+    """Otherwise a guard reads the missing value as falsy, so as satisfied."""
+    with pytest.raises(ValueError, match="must carry a value"):
+        Observation.reading("rain_incoming", None)
+
+
+def test_a_guard_can_never_be_satisfied_without_a_reading() -> None:
+    """The four-state model exists to stop a missing reading meaning `clear`."""
+    for reason in UnusableReason:
+        observations = Observations(
+            {"rain_incoming": Observation.missing("rain_incoming", reason)}
+        )
+
+        assert observations.guard("rain_incoming") is not GuardState.SATISFIED
 
 
 def test_an_observation_cannot_be_mutated() -> None:
@@ -331,6 +349,31 @@ def test_a_group_key_uses_the_group_test() -> None:
 def test_an_unknown_key_is_not_usable() -> None:
     """An input a room never built cannot be read."""
     assert not Observations().usable("never_built")
+
+
+def test_a_snapshot_cannot_be_changed_behind_its_back() -> None:
+    """The observations handed to a rule are the ones that were evaluated."""
+    observations = {
+        "indoor_temperature": Observation.reading("indoor_temperature", 21.5)
+    }
+    groups = {"window_contacts": _group(off=("a",))}
+    snapshot = Observations(observations, groups)
+
+    observations["indoor_temperature"] = Observation.reading("indoor_temperature", 99.0)
+    groups["window_contacts"] = _group(on=("a",))
+
+    assert snapshot.value("indoor_temperature") == 21.5
+    assert not snapshot.group("window_contacts").any_known_on
+
+
+def test_an_observation_wins_over_a_group_of_the_same_name() -> None:
+    """One key names one input; the observation is the one that is read."""
+    snapshot = Observations(
+        {"window_contacts": Observation.reading("window_contacts", value=True)},
+        {"window_contacts": _group(unusable=("a",))},
+    )
+
+    assert snapshot.usable("window_contacts")
 
 
 # Reading values
@@ -538,24 +581,76 @@ def test_identity_ignores_everything_that_changes_during_its_life() -> None:
     second = build(25.7, ("binary_sensor.left", "binary_sensor.right"))
 
     assert first.identity_in("room") == second.identity_in("room")
+    assert len({first.identity_in("room"), second.identity_in("room")}) == 1
+
+
+def test_identity_is_not_dataclass_equality() -> None:
+    """Two instances of one advisory differ as values while sharing identity."""
+
+    def build(temperature: float) -> Advisory:
+        return Advisory(
+            rule_id="window.passive_cooling",
+            category=Category.WINDOW,
+            action=Action.OPEN,
+            reason_code="passive_cooling",
+            reason_placeholders={"temperature": temperature},
+        )
+
+    assert build(25.6) != build(25.7)
+    assert build(25.6).identity_in("room") == build(25.7).identity_in("room")
 
 
 def test_an_advisory_mapping_cannot_be_changed_behind_its_back() -> None:
     """The snapshot is frozen on publish and must stay that way."""
     placeholders = {"advantage": 4.0}
+    sources = {"indoor_temperature": "sensor.office"}
+    snapshot = {"indoor_temperature": 25.6}
     advisory = Advisory(
         rule_id="window.passive_cooling",
         category=Category.WINDOW,
         action=Action.OPEN,
         reason_code="passive_cooling",
         reason_placeholders=placeholders,
+        source_entities=sources,
+        observations=snapshot,
     )
 
     placeholders["advantage"] = 99.0
+    sources["indoor_temperature"] = "sensor.elsewhere"
+    snapshot["indoor_temperature"] = 99.0
 
     assert advisory.reason_placeholders["advantage"] == 4.0
-    with pytest.raises(TypeError):
-        advisory.reason_placeholders["advantage"] = 99.0  # type: ignore[index]
+    assert advisory.source_entities["indoor_temperature"] == "sensor.office"
+    assert advisory.observations["indoor_temperature"] == 25.6
+
+
+def test_an_advisory_can_be_copied_and_serialised() -> None:
+    """Diagnostics and the publisher need an ordinary dataclass."""
+    advisory = Advisory(
+        rule_id="window.passive_cooling",
+        category=Category.WINDOW,
+        action=Action.OPEN,
+        reason_code="passive_cooling",
+        reason_placeholders={"advantage": 4.0},
+    )
+
+    assert dataclasses.asdict(advisory)["reason_placeholders"] == {"advantage": 4.0}
+    assert copy.deepcopy(advisory) == advisory
+    assert json.dumps(advisory.reason_placeholders) == '{"advantage": 4.0}'
+
+
+def test_replacing_an_advisory_still_enforces_its_category() -> None:
+    """The invariants hold however an instance is built."""
+    advisory = Advisory(
+        rule_id="window.passive_cooling",
+        category=Category.WINDOW,
+        action=Action.OPEN,
+        reason_code="passive_cooling",
+    )
+
+    assert dataclasses.replace(advisory, action=Action.CLOSE).action is Action.CLOSE
+    with pytest.raises(ValueError, match="cannot advise"):
+        dataclasses.replace(advisory, action=Action.TURN_ON)
 
 
 def test_an_advisory_defaults_to_empty_context() -> None:
