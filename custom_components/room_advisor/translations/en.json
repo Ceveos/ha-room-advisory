@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Room Advisor",
-        "description": "Room Advisor publishes what is advisable in each room, and why. It never performs the action itself.\n\nThis hub holds your house-wide settings: the shared outdoor sensors and the default thresholds that every room inherits. Add your rooms, and choose those shared inputs, after setup."
+        "description": "Room Advisor tells you what is worth doing in each room, and why, as entities your automations can use.\n\nThis hub holds the inputs and default settings that every room inherits, so you only set them once. Everything here is optional, and any room can override what it inherits.\n\nAdd your rooms next."
       }
     },
     "abort": {

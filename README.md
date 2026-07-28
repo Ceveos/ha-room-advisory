@@ -1,33 +1,32 @@
 # Room Advisor
 
-A Home Assistant integration that answers one question:
+A Home Assistant integration that answers one question per room:
 
-> Given the sensors and devices available in a room, what actions are advisable
-> right now, and why?
+> What is worth doing in here right now, and why?
 
-Room Advisor observes existing Home Assistant entities, evaluates a set of
-built-in rules, and exposes the result as stable, observable entities. It
-**never performs the action** — automations, dashboards, notifications and
-scripts decide what to do with the advice.
+It reads the sensors you already have and publishes the answer as entities.
+`sensor.office_window_advice` becomes `open`, with a reason attached saying it
+is 4°C cooler outside. Your automations, dashboards and notifications decide
+what to do about it.
 
 ## Why
 
-Advice of this kind is usually built per room, as a pile of template sensors
-and helpers. That works until there are eight rooms: the logic drifts, no two
-rooms agree, and nothing explains itself when it fires at the wrong moment.
+The usual way to build this is a template sensor per room. That is fine for one
+room. By the eighth you have eight near-copies, they drift apart as you tweak
+them one at a time, and when one gives odd advice there is no way to see what it
+was reading.
 
-Room Advisor moves that logic into one place with three properties the
-template approach lacks:
+Room Advisor does the job once for every room, and adds three things a template
+does not give you:
 
-- **It says why.** Every piece of advice carries a stable reason code and the
-  entities it was based on, so a surprising recommendation can be explained
-  rather than guessed at.
-- **It is honest about missing data.** An input that is unavailable is not
-  treated as `false`. Advice to *close* something is allowed on partial
-  information; advice to *open* something is not.
-- **It does not act.** Nothing is toggled, and no notification is sent. What
-  to do with the advice is the consumer's decision, which keeps the
-  recommendation testable and the side effects yours.
+- **A reason.** Every piece of advice carries a reason code and the entities it
+  was based on, so you can check why it fired.
+- **Sensible behaviour when a sensor dies.** An unavailable sensor is not read
+  as "no". Room Advisor will still tell you to close a window on incomplete
+  information, but it will not tell you to open one.
+- **No side effects.** It switches nothing and sends nothing. You connect the
+  output to whatever you like.
+
 
 ## Status
 

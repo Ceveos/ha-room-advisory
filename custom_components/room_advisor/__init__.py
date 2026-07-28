@@ -1,7 +1,8 @@
 """The Room Advisor integration.
 
-Room Advisor reads a room's existing Home Assistant entities and publishes what
-is advisable there, and why. It never performs the action.
+Creates entities describing what is worth doing in each room right now, and
+why — open a window, run a fan, turn the lights off — for automations,
+dashboards and notifications to act on.
 """
 
 from __future__ import annotations
