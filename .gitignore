@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Editors
+.vscode/
+.idea/
+
+# Private design documents. Deliberately not published: these are working
+# documents, and the README and code are expected to stand on their own.
+ROOM_ADVISOR_PRD.md
+ROOM_ADVISOR_TDD.md

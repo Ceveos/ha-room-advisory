@@ -1,0 +1,95 @@
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+src = ["."]
+
+# The design documents contain illustrative Python blocks that are deliberately
+# aligned for reading, not for execution. Ruff formats Markdown code blocks; it
+# must not own those files.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = [
+    "A",      # builtin shadowing
+    "ANN",    # missing annotations
+    "ARG",    # unused arguments
+    "ASYNC",  # async correctness
+    "B",      # bugbear
+    "C4",     # comprehensions
+    "D",      # docstrings
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "FBT",    # boolean trap
+    "I",      # import sorting
+    "N",      # naming
+    "PGH",    # blanket noqa / type ignore
+    "PT",     # pytest style
+    "PTH",    # pathlib over os.path
+    "RET",    # return simplification
+    "RUF",    # ruff-specific
+    "SIM",    # simplification
+    "SLF",    # private member access
+    "T20",    # print / pprint
+    "TRY",    # exception antipatterns
+    "UP",     # pyupgrade
+    "W",      # pycodestyle warnings
+]
+ignore = [
+    "D203",   # conflicts with D211
+    "D213",   # conflicts with D212
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "SLF001",  # tests legitimately reach into internals
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.ruff.lint.isort]
+known-first-party = ["custom_components", "tests"]
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+files = ["custom_components/room_advisor", "tests"]
+
+# `custom_components` is a namespace package with no `__init__.py`, which is how
+# Home Assistant loads it. Without these, mypy resolves the same file as both
+# `room_advisor.const` and `custom_components.room_advisor.const`.
+mypy_path = "."
+namespace_packages = true
+explicit_package_bases = true
+
+# The Home Assistant test harness ships no `py.typed`. Untyped imports from it
+# are tolerated; nothing else is.
+[[tool.mypy.overrides]]
+module = ["pytest_homeassistant_custom_component.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=custom_components.room_advisor",
+    "--cov-report=term-missing",
+    "--cov-fail-under=90",
+]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]

@@ -1,0 +1,21 @@
+# Test runner image.
+#
+# Home Assistant's test harness cannot run on Windows: `homeassistant.runner`
+# imports the POSIX-only `fcntl`. This image gives a Linux environment that
+# matches the `ubuntu-latest` runner used by CI.
+#
+# Dependencies are installed at build time so the repository bind-mount does
+# not need to carry them; rebuild after changing `requirements-dev.txt`.
+
+FROM python:3.14-slim
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /workspace
+
+COPY requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements-dev.txt
+
+CMD ["pytest"]

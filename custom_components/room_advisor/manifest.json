@@ -1,0 +1,13 @@
+{
+  "domain": "room_advisor",
+  "name": "Room Advisor",
+  "codeowners": ["@Ceveos"],
+  "config_flow": true,
+  "documentation": "https://github.com/Ceveos/ha-room-advisory",
+  "integration_type": "hub",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/Ceveos/ha-room-advisory/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}

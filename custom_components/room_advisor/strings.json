@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Room Advisor",
+        "description": "Room Advisor tells you what is worth doing in each room, and why, as entities your automations can use.\n\nThis hub holds the inputs and default settings that every room inherits, so you only set them once. Everything here is optional, and any room can override what it inherits.\n\nAdd your rooms next."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Already configured. There is one Room Advisor hub per house; add each room to the existing hub."
+    }
+  }
+}
