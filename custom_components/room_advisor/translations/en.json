@@ -45,7 +45,8 @@
       },
       "error": {
         "unknown_area": "That area no longer exists. Pick another one, or leave it empty and name the room yourself.",
-        "name_required": "Give the room a name, or pick an area to name it after."
+        "name_required": "Give the room a name, or pick an area to name it after.",
+        "name_taken": "There is already a room with this name."
       },
       "abort": {
         "reconfigure_successful": "Room updated."

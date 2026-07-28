@@ -20,6 +20,7 @@ from homeassistant.config_entries import (
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers.normalized_name_base_registry import normalize_name
 from homeassistant.helpers.selector import AreaSelector, TextSelector
 
 from .const import CONF_AREA_ID, DOMAIN, NAME, SUBENTRY_TYPE_ROOM
@@ -96,7 +97,7 @@ class RoomSubentryFlow(ConfigSubentryFlow):
         if user_input is None:
             return self._show_form("reconfigure", dict(subentry.data), {})
 
-        room, errors = self._validate(user_input)
+        room, errors = self._validate(user_input, subentry.subentry_id)
         if errors:
             return self._show_form("reconfigure", user_input, errors)
 
@@ -115,11 +116,13 @@ class RoomSubentryFlow(ConfigSubentryFlow):
         )
 
     def _validate(
-        self, user_input: dict[str, Any]
+        self, user_input: dict[str, Any], subentry_id: str | None = None
     ) -> tuple[dict[str, Any], dict[str, str]]:
         """Resolve a room from the submitted form.
 
-        An empty name falls back to the area's name.
+        An empty name falls back to the area's name. Names are compared the way
+        Home Assistant compares area names, so "Great Room" and "great room"
+        are the same room.
         """
         errors: dict[str, str] = {}
         area_id: str | None = user_input.get(CONF_AREA_ID)
@@ -132,7 +135,20 @@ class RoomSubentryFlow(ConfigSubentryFlow):
             elif not name:
                 name = area.name
 
-        if not name and not errors:
-            errors[CONF_NAME] = "name_required"
+        if not name:
+            if not errors:
+                errors[CONF_NAME] = "name_required"
+        elif self._name_taken(name, subentry_id):
+            errors[CONF_NAME] = "name_taken"
 
         return {CONF_NAME: name, CONF_AREA_ID: area_id}, errors
+
+    def _name_taken(self, name: str, subentry_id: str | None) -> bool:
+        """Return whether another room already answers to this name."""
+        normalized = normalize_name(name)
+        return any(
+            other_id != subentry_id
+            and subentry.subentry_type == SUBENTRY_TYPE_ROOM
+            and normalize_name(subentry.data[CONF_NAME]) == normalized
+            for other_id, subentry in self._get_entry().subentries.items()
+        )

@@ -148,7 +148,7 @@ async def test_add_room_for_a_deleted_area_is_an_error(
     assert not config_entry.subentries
 
 
-async def test_two_rooms_may_share_an_area(
+async def test_two_rooms_may_share_an_area_when_named_apart(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
     """An area may hold more than one room.
@@ -165,6 +165,87 @@ async def test_two_rooms_may_share_an_area(
     assert first != second
     assert len(config_entry.subentries) == 2
     assert _device_for(hass, first) != _device_for(hass, second)
+
+
+async def test_adding_the_same_area_twice_is_caught_by_its_name(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Adding a room for an area already covered is refused.
+
+    The second room takes the same name from the same area, so the accident is
+    caught without having to forbid two deliberately named rooms in one area.
+    """
+    area = ar.async_get(hass).async_create("Office")
+    await _setup_hub(hass, config_entry)
+    await _add_room(hass, config_entry, area_id=area.id)
+
+    result = await _submit_new_room(hass, config_entry, {CONF_AREA_ID: area.id})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_NAME: "name_taken"}
+    assert len(config_entry.subentries) == 1
+
+
+async def test_room_names_are_compared_the_way_areas_are(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Case and spacing do not make a room distinct."""
+    await _setup_hub(hass, config_entry)
+    await _add_room(hass, config_entry, name="Great Room")
+
+    result = await _submit_new_room(hass, config_entry, {CONF_NAME: "great room"})
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_NAME: "name_taken"}
+    assert len(config_entry.subentries) == 1
+
+
+async def test_reconfigure_may_keep_the_rooms_current_name(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A room does not collide with itself."""
+    area_registry = ar.async_get(hass)
+    office = area_registry.async_create("Office")
+    study = area_registry.async_create("Study")
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, area_id=office.id, name="Desk")
+
+    result = await hass.config_entries.subentries.async_init(
+        (config_entry.entry_id, SUBENTRY_TYPE_ROOM),
+        context={"source": SOURCE_RECONFIGURE, "subentry_id": subentry_id},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {CONF_AREA_ID: study.id, CONF_NAME: "Desk"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert dict(config_entry.subentries[subentry_id].data) == {
+        CONF_NAME: "Desk",
+        CONF_AREA_ID: study.id,
+    }
+
+
+async def test_reconfigure_rejects_another_rooms_name(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A room cannot be renamed onto a name already in use."""
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, name="Office")
+    await _add_room(hass, config_entry, name="Study")
+
+    result = await hass.config_entries.subentries.async_init(
+        (config_entry.entry_id, SUBENTRY_TYPE_ROOM),
+        context={"source": SOURCE_RECONFIGURE, "subentry_id": subentry_id},
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {CONF_NAME: "Study"}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {CONF_NAME: "name_taken"}
+    assert config_entry.subentries[subentry_id].title == "Office"
 
 
 async def test_add_room_creates_a_device_in_the_area(
