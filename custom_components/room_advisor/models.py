@@ -32,7 +32,12 @@ class Action(StrEnum):
 
 
 class Category(StrEnum):
-    """A family of advice, published as one entity per room."""
+    """A family of advice, published as one entity per room.
+
+    A closed set: a category is evaluated by rules, so adding one means adding
+    rules rather than configuration. Consumers of a category should iterate
+    this enum rather than branch on its members.
+    """
 
     WINDOW = "window"
     FAN = "fan"
@@ -42,11 +47,15 @@ class Category(StrEnum):
     def advisable_actions(self) -> frozenset[Action]:
         """The actions an advisory in this category may carry.
 
-        Excludes `NONE`, which is the absence of advice rather than advice.
+        These are also the options the category's entity declares, minus
+        `NONE`, which is the absence of advice rather than advice.
         """
         return _ADVISABLE_ACTIONS[self]
 
 
+# Advice is corrective: it names something worth putting right. Lighting
+# therefore advises only turning off, because a light being off is not a fault
+# and no reading distinguishes a dark room from one someone wants dark.
 _ADVISABLE_ACTIONS: Final[Mapping[Category, frozenset[Action]]] = {
     Category.WINDOW: frozenset({Action.OPEN, Action.CLOSE}),
     Category.FAN: frozenset({Action.TURN_ON, Action.TURN_OFF}),
