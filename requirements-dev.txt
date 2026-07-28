@@ -1,0 +1,8 @@
+# Development and CI dependencies.
+#
+# pytest-homeassistant-custom-component pins the whole test toolchain,
+# including homeassistant itself (2026.7.4), pytest, syrupy and freezegun.
+# Do not pin homeassistant separately here — it would fight that pin.
+pytest-homeassistant-custom-component==0.13.348
+ruff==0.16.0
+mypy==2.3.0
