@@ -9,5 +9,41 @@
     "abort": {
       "single_instance_allowed": "Already configured. There is one Room Advisor hub per house; add each room to the existing hub."
     }
+  },
+  "config_subentries": {
+    "room": {
+      "entry_type": "Room",
+      "initiate_flow": {
+        "user": "Add room",
+        "reconfigure": "Move room to another area"
+      },
+      "step": {
+        "user": {
+          "title": "Add a room",
+          "description": "Pick the area this room covers. Room Advisor reads the entities already assigned to that area, so there is nothing else to wire up.",
+          "data": {
+            "area_id": "Area"
+          },
+          "data_description": {
+            "area_id": "Each area can be added once. The room takes its name from the area."
+          }
+        },
+        "reconfigure": {
+          "title": "Move room to another area",
+          "description": "Point this room at a different area. Its advice keeps the same entity IDs, so anything already using them keeps working.",
+          "data": {
+            "area_id": "Area"
+          },
+          "data_description": {
+            "area_id": "Each area can be added once."
+          }
+        }
+      },
+      "abort": {
+        "already_configured": "That area is already set up as a room.",
+        "unknown_area": "That area no longer exists.",
+        "reconfigure_successful": "Room moved."
+      }
+    }
   }
 }

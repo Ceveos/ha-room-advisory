@@ -21,9 +21,10 @@ def auto_enable_custom_integrations(
 
 @pytest.fixture
 def config_entry() -> MockConfigEntry:
-    """Return a Room Advisor hub config entry.
+    """Return a Room Advisor hub config entry with no rooms.
 
-    Deliberately empty: the stored shape is settled in PR 2, and a placeholder
-    shape here would be a shape a later PR has to migrate away from.
+    The hub itself stores nothing yet — its shared inputs and default
+    thresholds land with the configuration work. Rooms are subentries, so
+    tests that need one add it through the subentry flow.
     """
     return MockConfigEntry(domain=DOMAIN, title="Room Advisor", data={})
