@@ -1,0 +1,27 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run Home Assistant",
+      "type": "shell",
+      "command": "bash scripts/develop",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test",
+      "type": "shell",
+      "command": "pytest",
+      "problemMatcher": [],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Lint and type check",
+      "type": "shell",
+      "command": "ruff format --check . && ruff check . && mypy",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Run Home Assistant with Room Advisor loaded, on http://localhost:8123.
+#
+# The integration is symlinked rather than copied, so edits land in the running
+# instance and only need a restart. The config directory is throwaway and is
+# not tracked; delete it to start again from onboarding.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+mkdir -p config/custom_components
+
+if [ ! -f config/configuration.yaml ]; then
+  cat > config/configuration.yaml <<'YAML'
+default_config:
+
+logger:
+  default: info
+  logs:
+    custom_components.room_advisor: debug
+YAML
+fi
+
+ln -sfn "$PWD/custom_components/room_advisor" config/custom_components/room_advisor
+
+exec hass --config config --debug

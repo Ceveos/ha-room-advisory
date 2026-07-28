@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Install development dependencies. Run automatically when the devcontainer is
+# created; safe to re-run after changing requirements-dev.txt.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
