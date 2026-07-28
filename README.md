@@ -9,26 +9,8 @@ It reads the sensors you already have and publishes the answer as entities.
 is 4°C cooler outside. Your automations, dashboards and notifications decide
 what to do about it.
 
-## Why
-
-The usual way to build this is a template sensor per room. That is fine for one
-room. By the eighth you have eight near-copies, they drift apart as you tweak
-them one at a time, and when one gives odd advice there is no way to see what it
-was reading.
-
-Room Advisor does the job once for every room, and adds three things a template
-does not give you:
-
-- **A reason.** Every piece of advice carries a reason code and the entities it
-  was based on, so you can check why it fired.
-- **It knows when it cannot tell.** An unavailable sensor is not read as "no".
-  If your rain sensor drops out, Room Advisor stops advising you to open
-  windows, while still telling you to close one left open with the heating
-  running. A template that reads `unavailable` as `0` does the opposite of that.
-- **It does not nag.** Advice must hold for a set time before it appears, and
-  clears on a wider band than it appeared on, so a temperature sitting near a
-  threshold produces one notification instead of forty.
-
+The point is to write that logic once rather than once per room, and to have
+every answer record what it was looking at.
 
 ## Status
 
