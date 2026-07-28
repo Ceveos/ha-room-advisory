@@ -9,5 +9,48 @@
     "abort": {
       "single_instance_allowed": "Already configured. There is one Room Advisor hub per house; add each room to the existing hub."
     }
+  },
+  "config_subentries": {
+    "room": {
+      "entry_type": "Room",
+      "initiate_flow": {
+        "user": "Add room",
+        "reconfigure": "Rename or move room"
+      },
+      "step": {
+        "user": {
+          "title": "Add a room",
+          "description": "Pick the area this room covers and Room Advisor will suggest its entities. If the room does not match a single area, leave this empty and give the room a name instead.",
+          "data": {
+            "area_id": "Area",
+            "name": "Name"
+          },
+          "data_description": {
+            "area_id": "Used to suggest this room's entities and to file its device.",
+            "name": "Leave empty to name the room after its area."
+          }
+        },
+        "reconfigure": {
+          "title": "Rename or move room",
+          "description": "Rename this room, or point it at a different area. Its entity IDs do not change.",
+          "data": {
+            "area_id": "Area",
+            "name": "Name"
+          },
+          "data_description": {
+            "area_id": "Used to suggest this room's entities and to file its device.",
+            "name": "Leave empty to name the room after its area."
+          }
+        }
+      },
+      "error": {
+        "unknown_area": "That area no longer exists. Pick another one, or leave it empty and name the room yourself.",
+        "name_required": "Give the room a name, or pick an area to name it after.",
+        "name_taken": "There is already a room with this name."
+      },
+      "abort": {
+        "reconfigure_successful": "Room updated."
+      }
+    }
   }
 }

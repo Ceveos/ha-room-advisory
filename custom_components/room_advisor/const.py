@@ -10,10 +10,19 @@ DOMAIN: Final = "room_advisor"
 
 NAME: Final = "Room Advisor"
 
-PLATFORMS: Final[tuple[Platform, ...]] = ()
-"""Platforms forwarded on setup.
+SUBENTRY_TYPE_ROOM: Final = "room"
+"""Subentry type for a room.
 
-Empty until the publisher lands. The forward and unload calls in ``__init__``
-are already written against this tuple, so adding a platform is a one-line
-change rather than a new code path.
+The subentry id is the room's identity, and is stable across renames and area
+changes.
 """
+
+CONF_AREA_ID: Final = "area_id"
+"""The area a room is drawn from, if any.
+
+Seeds the room's entity candidates and files its device. Optional, and not an
+identity.
+"""
+
+PLATFORMS: Final[tuple[Platform, ...]] = ()
+"""Platforms forwarded on setup."""
