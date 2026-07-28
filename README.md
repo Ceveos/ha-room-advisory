@@ -21,11 +21,13 @@ does not give you:
 
 - **A reason.** Every piece of advice carries a reason code and the entities it
   was based on, so you can check why it fired.
-- **Sensible behaviour when a sensor dies.** An unavailable sensor is not read
-  as "no". Room Advisor will still tell you to close a window on incomplete
-  information, but it will not tell you to open one.
-- **No side effects.** It switches nothing and sends nothing. You connect the
-  output to whatever you like.
+- **It knows when it cannot tell.** An unavailable sensor is not read as "no".
+  If your rain sensor drops out, Room Advisor stops advising you to open
+  windows, while still telling you to close one left open with the heating
+  running. A template that reads `unavailable` as `0` does the opposite of that.
+- **It does not nag.** Advice must hold for a set time before it appears, and
+  clears on a wider band than it appeared on, so a temperature sitting near a
+  threshold produces one notification instead of forty.
 
 
 ## Status
