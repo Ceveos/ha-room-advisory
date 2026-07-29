@@ -59,6 +59,18 @@ Container*, then run the *Run Home Assistant* task — or `bash scripts/develop`
 integration into it, so edits reach the running instance and only need a
 restart. Delete `config/` to start again from onboarding.
 
+The generated configuration loads `frontend` rather than `default_config`, and
+Home Assistant is started with `--skip-pip`. `default_config` pulls in
+bluetooth, cloud, camera and voice, whose optional binary dependencies have no
+wheels for this Python; Home Assistant tries to build them on every start, and
+a failure part-way through drops the instance into recovery mode with no
+frontend. None of them are inputs to Room Advisor.
+
+Home Assistant preloads some of those components regardless of configuration,
+so expect around fifteen setup errors at boot for `ffmpeg`, `tts`,
+`conversation` and friends. They are inert. Filter the log with
+`grep room_advisor` to see only this integration.
+
 The devcontainer installs the same `requirements-dev.txt` as the check image,
 so the two cannot drift. It does not replace them: `Dockerfile.test` stays the
 fast, pinned gate, and the devcontainer is for looking at the UI.

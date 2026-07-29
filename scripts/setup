@@ -7,3 +7,21 @@ cd "$(dirname "$0")/.."
 
 python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
+
+# The frontend is the one Home Assistant dependency a development instance
+# cannot do without, and it ships separately from the core package. Install the
+# exact version Home Assistant asks for, read from its own manifest, so the two
+# cannot drift and this file needs no pin of its own.
+python - <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+
+import homeassistant
+
+components = pathlib.Path(homeassistant.__file__).parent / "components"
+manifest = components / "frontend" / "manifest.json"
+(requirement,) = json.loads(manifest.read_text())["requirements"]
+subprocess.check_call([sys.executable, "-m", "pip", "install", requirement])
+PY
