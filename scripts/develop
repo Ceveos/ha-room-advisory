@@ -12,7 +12,14 @@ mkdir -p config/custom_components
 
 if [ ! -f config/configuration.yaml ]; then
   cat > config/configuration.yaml <<'YAML'
-default_config:
+# Deliberately not `default_config`. That pulls in bluetooth, cloud, camera,
+# voice and more, whose optional binary dependencies have no wheels for this
+# Python and fail to build — taking the frontend down with them. Room Advisor
+# needs none of them: it reads entity states and publishes advice.
+#
+# Add whatever a given test needs, and pip install its requirements by hand;
+# Home Assistant is started with --skip-pip and will not install them for you.
+frontend:
 
 logger:
   default: info
@@ -23,4 +30,8 @@ fi
 
 ln -sfn "$PWD/custom_components/room_advisor" config/custom_components/room_advisor
 
-exec hass --config config --debug
+# --skip-pip: nothing here should be installed at runtime. Without it Home
+# Assistant tries to build the dependencies of every integration it loads, on
+# every start, and a failure part-way through leaves the instance in recovery
+# mode with no explanation of why.
+exec hass --config config --debug --skip-pip
