@@ -15,7 +15,7 @@
       "entry_type": "Room",
       "initiate_flow": {
         "user": "Add room",
-        "reconfigure": "Edit room"
+        "reconfigure": "Configure room"
       },
       "step": {
         "user": {
@@ -31,15 +31,13 @@
           }
         },
         "reconfigure": {
-          "title": "Edit room",
-          "description": "Rename this room, or point it at a different area. Its entity IDs do not change. You can change the entities it reads on the next step.",
+          "title": "Configure room",
+          "description": "Point this room at a different area, then choose the entities it reads on the next step. Its entity IDs do not change.\n\nTo rename the room, use Rename in its menu.",
           "data": {
-            "area_id": "Area",
-            "name": "Name"
+            "area_id": "Area"
           },
           "data_description": {
-            "area_id": "Where this room's device is filed. Entities are suggested from the area only when a room is first added.",
-            "name": "Leave empty to name the room after its area."
+            "area_id": "Where this room's device is filed. Entities are suggested from the area only when a room is first added."
           }
         },
         "inputs": {
@@ -66,7 +64,7 @@
         }
       },
       "error": {
-        "unknown_area": "That area no longer exists. Pick another one, or leave it empty and name the room yourself.",
+        "unknown_area": "That area no longer exists. Pick another one, or leave it empty.",
         "name_required": "Give the room a name, or pick an area to name it after.",
         "name_taken": "There is already a room with this name."
       },

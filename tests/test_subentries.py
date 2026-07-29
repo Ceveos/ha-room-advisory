@@ -142,7 +142,7 @@ def _suggested(result: dict[str, Any]) -> dict[str, Any]:
 async def test_add_room_stores_a_name_and_an_area(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A room stores a name and the area it was drawn from."""
+    """A room is named by its subentry title and stores the area it came from."""
     area = ar.async_get(hass).async_create("Office")
     await _setup_hub(hass, config_entry)
 
@@ -151,11 +151,7 @@ async def test_add_room_stores_a_name_and_an_area(
 
     assert subentry.subentry_type == SUBENTRY_TYPE_ROOM
     assert subentry.title == "Office"
-    assert dict(subentry.data) == {
-        CONF_NAME: "Office",
-        CONF_AREA_ID: area.id,
-        CONF_INPUTS: {},
-    }
+    assert dict(subentry.data) == {CONF_AREA_ID: area.id, CONF_INPUTS: {}}
 
 
 async def test_a_room_may_be_named_instead_of_its_area(
@@ -184,7 +180,6 @@ async def test_a_room_need_not_have_an_area(
     subentry_id = await _add_room(hass, config_entry, name="Great Room")
 
     assert dict(config_entry.subentries[subentry_id].data) == {
-        CONF_NAME: "Great Room",
         CONF_AREA_ID: None,
         CONF_INPUTS: {},
     }
@@ -279,10 +274,13 @@ async def test_room_names_are_compared_the_way_areas_are(
     assert len(config_entry.subentries) == 1
 
 
-async def test_reconfigure_may_keep_the_rooms_current_name(
+async def test_configuring_a_room_moves_it_between_areas(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A room does not collide with itself."""
+    """The area is a room setting, so the flow is where it changes.
+
+    The room's title is not the flow's to touch.
+    """
     area_registry = ar.async_get(hass)
     office = area_registry.async_create("Office")
     study = area_registry.async_create("Study")
@@ -290,36 +288,62 @@ async def test_reconfigure_may_keep_the_rooms_current_name(
     subentry_id = await _add_room(hass, config_entry, area_id=office.id, name="Desk")
 
     result = await _reconfigure_room(
-        hass,
-        config_entry,
-        subentry_id,
-        {CONF_AREA_ID: study.id, CONF_NAME: "Desk"},
+        hass, config_entry, subentry_id, {CONF_AREA_ID: study.id}
     )
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
+    assert config_entry.subentries[subentry_id].title == "Desk"
     assert dict(config_entry.subentries[subentry_id].data) == {
-        CONF_NAME: "Desk",
         CONF_AREA_ID: study.id,
         CONF_INPUTS: {},
     }
 
 
-async def test_reconfigure_rejects_another_rooms_name(
+async def test_configuring_a_room_offers_no_name_field(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A room cannot be renamed onto a name already in use."""
+    """Home Assistant renames a room, so the flow does not offer to."""
     await _setup_hub(hass, config_entry)
     subentry_id = await _add_room(hass, config_entry, name="Office")
-    await _add_room(hass, config_entry, name="Study")
 
-    result = await _reconfigure_room(
-        hass, config_entry, subentry_id, {CONF_NAME: "Study"}
+    result = await _start_reconfigure(hass, config_entry, subentry_id)
+
+    assert [marker.schema for marker in result["data_schema"].schema] == [CONF_AREA_ID]
+
+
+async def test_renaming_a_room_reaches_its_device(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Home Assistant's rename writes the title alone.
+
+    The device is named from the title rather than from stored data, so the
+    two cannot drift apart.
+    """
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, name="Kitchen")
+
+    hass.config_entries.async_update_subentry(
+        config_entry, config_entry.subentries[subentry_id], title="Galley"
     )
+    await hass.async_block_till_done()
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {CONF_NAME: "name_taken"}
-    assert config_entry.subentries[subentry_id].title == "Office"
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+    assert device.name == "Galley"
+
+
+async def test_a_room_is_a_service_without_a_model(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A room's device carries no model: its own row already reads "Room"."""
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, name="Office")
+
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+    assert device.entry_type is dr.DeviceEntryType.SERVICE
+    assert device.model is None
 
 
 async def test_add_room_creates_a_device_in_the_area(
@@ -381,7 +405,7 @@ async def test_a_room_without_an_area_keeps_a_manual_placement(
     assert device.area_id == area.id
 
 
-async def test_reconfigure_renames_the_room_but_keeps_its_identity(
+async def test_renaming_a_room_keeps_its_identity(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
     """Renaming a room keeps its subentry and device.
@@ -394,24 +418,19 @@ async def test_reconfigure_renames_the_room_but_keeps_its_identity(
     original_device = _device_for(hass, subentry_id)
     assert original_device is not None
 
-    result = await _reconfigure_room(
-        hass,
-        config_entry,
-        subentry_id,
-        {CONF_AREA_ID: area.id, CONF_NAME: "Study"},
+    hass.config_entries.async_update_subentry(
+        config_entry, config_entry.subentries[subentry_id], title="Study"
     )
+    await hass.async_block_till_done()
 
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "reconfigure_successful"
     assert config_entry.subentries[subentry_id].title == "Study"
-
     device = _device_for(hass, subentry_id)
     assert device is not None
     assert device.id == original_device.id
     assert device.name == "Study"
 
 
-async def test_reconfigure_moves_the_room_to_another_area(
+async def test_configuring_a_room_re_files_its_device(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
     """Moving a room re-files its device without recreating it."""
@@ -424,10 +443,7 @@ async def test_reconfigure_moves_the_room_to_another_area(
     assert original_device is not None
 
     result = await _reconfigure_room(
-        hass,
-        config_entry,
-        subentry_id,
-        {CONF_AREA_ID: study.id, CONF_NAME: "Desk"},
+        hass, config_entry, subentry_id, {CONF_AREA_ID: study.id}
     )
 
     assert result["type"] is FlowResultType.ABORT
@@ -437,20 +453,42 @@ async def test_reconfigure_moves_the_room_to_another_area(
     assert device.area_id == study.id
 
 
-async def test_reconfigure_rejects_an_empty_name_without_an_area(
+async def test_configuring_a_room_may_clear_its_area(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A room cannot be left with nothing to call it."""
+    """A room that no longer matches an area keeps its name and its entities."""
+    area = ar.async_get(hass).async_create("Office")
     await _setup_hub(hass, config_entry)
-    subentry_id = await _add_room(hass, config_entry, name="Great Room")
+    subentry_id = await _add_room(hass, config_entry, area_id=area.id)
 
-    result = await _reconfigure_room(
-        hass, config_entry, subentry_id, {CONF_NAME: "   "}
+    result = await _reconfigure_room(hass, config_entry, subentry_id, {})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert config_entry.subentries[subentry_id].title == "Office"
+    assert config_entry.subentries[subentry_id].data[CONF_AREA_ID] is None
+
+
+async def test_configuring_a_room_for_a_deleted_area_is_an_error(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """An area that disappears mid-flow is caught when editing too."""
+    area_registry = ar.async_get(hass)
+    office = area_registry.async_create("Office")
+    doomed = area_registry.async_create("Spare room")
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, area_id=office.id)
+
+    result = await _start_reconfigure(hass, config_entry, subentry_id)
+    area_registry.async_delete(doomed.id)
+    result = dict(
+        await hass.config_entries.subentries.async_configure(
+            result["flow_id"], {CONF_AREA_ID: doomed.id}
+        )
     )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {CONF_NAME: "name_required"}
-    assert config_entry.subentries[subentry_id].title == "Great Room"
+    assert result["errors"] == {CONF_AREA_ID: "unknown_area"}
+    assert config_entry.subentries[subentry_id].data[CONF_AREA_ID] == office.id
 
 
 async def test_deleting_the_area_does_not_leave_the_device_pointing_at_it(
@@ -612,7 +650,7 @@ async def test_editing_a_room_opens_with_what_it_stores(
     result = await _start_reconfigure(hass, config_entry, subentry_id)
     result = dict(
         await hass.config_entries.subentries.async_configure(
-            result["flow_id"], {CONF_AREA_ID: area.id, CONF_NAME: "Office"}
+            result["flow_id"], {CONF_AREA_ID: area.id}
         )
     )
 
@@ -634,7 +672,7 @@ async def test_a_room_from_before_the_entity_step_is_offered_suggestions(
     hass.config_entries.async_add_subentry(
         config_entry,
         ConfigSubentry(
-            data=MappingProxyType({CONF_NAME: "Office", CONF_AREA_ID: area.id}),
+            data=MappingProxyType({CONF_AREA_ID: area.id}),
             subentry_type=SUBENTRY_TYPE_ROOM,
             title="Office",
             unique_id=None,
@@ -648,7 +686,7 @@ async def test_a_room_from_before_the_entity_step_is_offered_suggestions(
     result = await _start_reconfigure(hass, config_entry, subentry_id)
     result = dict(
         await hass.config_entries.subentries.async_configure(
-            result["flow_id"], {CONF_AREA_ID: area.id, CONF_NAME: "Office"}
+            result["flow_id"], {CONF_AREA_ID: area.id}
         )
     )
 
@@ -670,11 +708,7 @@ async def test_editing_a_room_replaces_its_entities(
     )
 
     result = await _reconfigure_room(
-        hass,
-        config_entry,
-        subentry_id,
-        {CONF_NAME: "Office"},
-        inputs={RoomInput.LIGHTS: ["light.desk"]},
+        hass, config_entry, subentry_id, {}, inputs={RoomInput.LIGHTS: ["light.desk"]}
     )
 
     assert result["type"] is FlowResultType.ABORT
