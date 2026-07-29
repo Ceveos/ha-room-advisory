@@ -41,6 +41,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = [
+    "FBT001",  # parametrised expectations are naturally booleans
     "SLF001",  # tests legitimately reach into internals
 ]
 
