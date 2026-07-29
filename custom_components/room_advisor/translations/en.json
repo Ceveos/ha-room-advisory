@@ -15,7 +15,7 @@
       "entry_type": "Room",
       "initiate_flow": {
         "user": "Add room",
-        "reconfigure": "Rename or move room"
+        "reconfigure": "Edit room"
       },
       "step": {
         "user": {
@@ -31,15 +31,37 @@
           }
         },
         "reconfigure": {
-          "title": "Rename or move room",
-          "description": "Rename this room, or point it at a different area. Its entity IDs do not change.",
+          "title": "Edit room",
+          "description": "Rename this room, or point it at a different area. Its entity IDs do not change. You can change the entities it reads on the next step.",
           "data": {
             "area_id": "Area",
             "name": "Name"
           },
           "data_description": {
-            "area_id": "Used to suggest this room's entities and to file its device.",
+            "area_id": "Where this room's device is filed. Entities are suggested from the area only when a room is first added.",
             "name": "Leave empty to name the room after its area."
+          }
+        },
+        "inputs": {
+          "title": "Room entities",
+          "description": "Choose what this room reads. Everything is optional: a missing entity only switches off the advice that needs it, so start with what you have.",
+          "data": {
+            "indoor_temperature": "Indoor temperature",
+            "indoor_co2": "Indoor CO2",
+            "occupancy": "Occupancy",
+            "window_contacts": "Window contacts",
+            "lights": "Lights",
+            "fan": "Fan",
+            "hvac": "Heating and cooling"
+          },
+          "data_description": {
+            "indoor_temperature": "Used by window and fan advice.",
+            "indoor_co2": "Used to advise airing the room out.",
+            "occupancy": "Used by fan and lighting advice.",
+            "window_contacts": "Every window this room has. Advice to open a window stops once one is open.",
+            "lights": "Every light this room has.",
+            "fan": "Used by fan advice.",
+            "hvac": "Used to avoid advising an open window while heating or cooling is running."
           }
         }
       },

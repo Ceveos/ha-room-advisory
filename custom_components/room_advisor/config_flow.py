@@ -1,8 +1,8 @@
 """Config flow for Room Advisor.
 
 One hub per house, holding the shared inputs and default thresholds that every
-room inherits. Rooms are added as subentries and may override what they
-inherit.
+room inherits. Rooms are added as subentries, each choosing the entities it
+reads and overriding what it inherits.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import (
+    SOURCE_RECONFIGURE,
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
@@ -24,6 +25,12 @@ from homeassistant.helpers.normalized_name_base_registry import normalize_name
 from homeassistant.helpers.selector import AreaSelector, TextSelector
 
 from .const import CONF_AREA_ID, DOMAIN, NAME, SUBENTRY_TYPE_ROOM
+from .inputs import (
+    CONF_INPUTS,
+    clean_room_inputs,
+    room_inputs_schema,
+    suggest_room_inputs,
+)
 
 ROOM_SCHEMA = vol.Schema(
     {
@@ -66,17 +73,19 @@ class RoomAdvisorConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class RoomSubentryFlow(ConfigSubentryFlow):
-    """Add, rename or move a room.
+    """Add or edit a room.
 
-    A room is a name plus, optionally, an area. The area seeds the room's
-    entity candidates and files its device; it is not the room's identity, so
-    renaming or moving a room leaves its entities alone.
+    A room is a name, optionally an area, and the entities it reads. The area
+    seeds the room's entity suggestions and files its device; it is not the
+    room's identity, so renaming or moving a room leaves its entities alone.
     """
+
+    _room: dict[str, Any]
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Add a room."""
+        """Name the new room and say which area it covers."""
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=ROOM_SCHEMA)
 
@@ -84,12 +93,13 @@ class RoomSubentryFlow(ConfigSubentryFlow):
         if errors:
             return self._show_form("user", user_input, errors)
 
-        return self.async_create_entry(title=room[CONF_NAME], data=room)
+        self._room = room
+        return await self.async_step_inputs()
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Rename a room or move it to a different area.
+        """Rename a room, move it, or change which entities it reads.
 
         The room keeps its subentry id, so its advice keeps its entity ids.
         """
@@ -101,9 +111,50 @@ class RoomSubentryFlow(ConfigSubentryFlow):
         if errors:
             return self._show_form("reconfigure", user_input, errors)
 
+        self._room = room
+        return await self.async_step_inputs()
+
+    async def async_step_inputs(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Choose the entities the room reads.
+
+        Every field is optional. A missing input disables only the rules that
+        need it, so a room with a thermometer and nothing else is a working
+        room.
+        """
+        if user_input is None:
+            return self.async_show_form(
+                step_id="inputs",
+                data_schema=self.add_suggested_values_to_schema(
+                    room_inputs_schema(), self._suggested_inputs()
+                ),
+            )
+
+        room = {**self._room, CONF_INPUTS: clean_room_inputs(user_input)}
+        if self.source != SOURCE_RECONFIGURE:
+            return self.async_create_entry(title=room[CONF_NAME], data=room)
+
         return self.async_update_and_abort(
-            self._get_entry(), subentry, title=room[CONF_NAME], data=room
+            self._get_entry(),
+            self._get_reconfigure_subentry(),
+            title=room[CONF_NAME],
+            data=room,
         )
+
+    def _suggested_inputs(self) -> dict[str, Any]:
+        """Decide what the entity form opens with.
+
+        A room that has already been through this step opens with exactly what
+        it stores, including the fields the user cleared. A room that has not —
+        a new room, or one added before this step existed — opens with what its
+        area offers.
+        """
+        if self.source == SOURCE_RECONFIGURE:
+            stored = self._get_reconfigure_subentry().data.get(CONF_INPUTS)
+            if stored is not None:
+                return dict(stored)
+        return suggest_room_inputs(self.hass, self._room[CONF_AREA_ID])
 
     def _show_form(
         self, step_id: str, values: dict[str, Any], errors: dict[str, str]
