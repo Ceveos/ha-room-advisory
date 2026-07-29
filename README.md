@@ -67,9 +67,16 @@ a failure part-way through drops the instance into recovery mode with no
 frontend. None of them are inputs to Room Advisor.
 
 Home Assistant preloads some of those components regardless of configuration,
-so expect around fifteen setup errors at boot for `ffmpeg`, `tts`,
-`conversation` and friends. They are inert. Filter the log with
-`grep room_advisor` to see only this integration.
+so expect a handful of setup errors at boot for `ffmpeg`, `tts`, `conversation`
+and friends. They are inert. Filter the log with `grep room_advisor` to see
+only this integration.
+
+Their Python requirements are not inert, though: the frontend asks for every
+service description on load, and validating those force-imports a fixed set of
+base components. If any of them cannot be imported the websocket call fails and
+the page never renders. `scripts/setup` installs exactly those requirements,
+pinned by Home Assistant's own manifests, so re-run it after changing the
+Home Assistant version — the devcontainer runs it for you on creation.
 
 The devcontainer installs the same `requirements-dev.txt` as the check image,
 so the two cannot drift. It does not replace them: `Dockerfile.test` stays the
