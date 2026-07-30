@@ -471,6 +471,50 @@ def test_a_mistyped_guard_key_raises_rather_than_being_skipped() -> None:
         Observations().guard("rian_incoming")
 
 
+@pytest.mark.parametrize(
+    ("group", "expected"),
+    [
+        (
+            GroupObservation("window_contacts", (), (), (), ()),
+            GuardState.NOT_CONFIGURED,
+        ),
+        (
+            GroupObservation("window_contacts", ("a", "b"), (), ("a", "b"), ()),
+            GuardState.SATISFIED,
+        ),
+        (
+            GroupObservation("window_contacts", ("a", "b"), ("a",), ("b",), ()),
+            GuardState.BLOCKING,
+        ),
+        (
+            GroupObservation("window_contacts", ("a", "b"), (), ("a",), ("b",)),
+            GuardState.UNUSABLE,
+        ),
+        (
+            GroupObservation("window_contacts", ("a",), (), (), ("a",)),
+            GuardState.UNUSABLE,
+        ),
+        (
+            GroupObservation("window_contacts", ("a", "b"), ("a",), (), ("b",)),
+            GuardState.BLOCKING,
+        ),
+    ],
+    ids=[
+        "unconfigured",
+        "all closed",
+        "one open",
+        "one unreadable",
+        "all unreadable",
+        "open despite an unreadable member",
+    ],
+)
+def test_a_group_read_as_a_guard(group: GroupObservation, expected: GuardState) -> None:
+    """A group withholds all clear unless every member reads off."""
+    observations = Observations(groups={"window_contacts": group})
+
+    assert observations.guard("window_contacts") is expected
+
+
 def test_guard_when_decides_what_a_reading_means() -> None:
     """Numeric guards supply their own blocking test."""
     observations = Observations(

@@ -283,7 +283,7 @@ def entity_ids(inputs: Mapping[str, Any], key: InputKey) -> list[str]:
     """
     value = inputs.get(key.value)
     if isinstance(value, list):
-        return [entity_id for entity_id in value if isinstance(entity_id, str)]
+        return _unique(entity_id for entity_id in value if isinstance(entity_id, str))
     if isinstance(value, str) and value:
         return [value]
     return []

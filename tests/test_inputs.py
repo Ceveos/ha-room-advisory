@@ -381,12 +381,27 @@ def test_clean_room_inputs(
             ["light.a", "light.b"],
             id="already a list",
         ),
+        pytest.param(
+            {InputKey.LIGHTS: ["light.a", "light.b", "light.a"]},
+            InputKey.LIGHTS,
+            ["light.a", "light.b"],
+            id="repeat dropped",
+        ),
+        pytest.param(
+            {InputKey.LIGHTS: ["", "light.a"]},
+            InputKey.LIGHTS,
+            ["light.a"],
+            id="empty entity id dropped",
+        ),
     ],
 )
 def test_entity_ids_reads_any_input_as_a_list(
     stored: dict[str, object], key: InputKey, expected: list[str]
 ) -> None:
-    """Callers that only want entities do not need to know a key's arity."""
+    """Callers that only want entities do not need to know a key's arity.
+
+    Repeats and blanks are dropped, so every reader sees distinct entities.
+    """
     assert entity_ids(stored, key) == expected
 
 

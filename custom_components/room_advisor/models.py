@@ -242,6 +242,17 @@ class GroupObservation:
         return bool(self.configured) and not self.unusable and not self.known_on
 
 
+def _group_guard(group: GroupObservation) -> GuardState:
+    """Read a multi-entity input as a guard."""
+    if not group.configured:
+        return GuardState.NOT_CONFIGURED
+    if group.any_known_on:
+        return GuardState.BLOCKING
+    if group.all_usable_and_off:
+        return GuardState.SATISFIED
+    return GuardState.UNUSABLE
+
+
 class Observations(Mapping[str, Observation]):
     """Every input of one room at one moment.
 
@@ -326,11 +337,19 @@ class Observations(Mapping[str, Observation]):
         return self._groups[key]
 
     def guard(self, key: str) -> GuardState:
-        """Check a guard that blocks while its input is true."""
+        """Check a guard that blocks while its input is true.
+
+        A multi-entity input blocks while any member is known on, and is
+        satisfied only once every member reads off, so a group holding an
+        unreadable member withholds rather than reporting all clear.
+        """
+        group = self._groups.get(key)
+        if group is not None:
+            return _group_guard(group)
         return self.guard_when(key, bool)
 
     def guard_when(self, key: str, blocking: Callable[[Any], bool]) -> GuardState:
-        """Check a guard, `blocking` deciding what its reading means.
+        """Check a single-entity guard, `blocking` deciding what a reading means.
 
         Every guard key a rule may consult is present in the snapshot, an
         unconfigured one carrying `NOT_CONFIGURED`. An unknown key is a
