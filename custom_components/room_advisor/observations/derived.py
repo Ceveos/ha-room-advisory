@@ -4,6 +4,9 @@ A derived observation is usable only when every source it reads is usable.
 When one is not, the derivation inherits a reason rather than a bare failure,
 because a guard treats "you never configured this" and "this is broken" as
 opposite instructions.
+
+One of them measures elapsed time rather than combining readings, so deriving
+takes the moment it happens at and the room's memory of the last one.
 """
 
 from __future__ import annotations
@@ -12,21 +15,24 @@ from dataclasses import dataclass
 from math import isfinite, log
 from typing import TYPE_CHECKING, Final
 
-from homeassistant.const import UnitOfTemperature
+from homeassistant.const import UnitOfTemperature, UnitOfTime
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.unit_conversion import TemperatureConverter
 
 from ..models import Observation, Observations, UnusableReason
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
+    from datetime import datetime, timedelta
 
 OUTDOOR_DEW_POINT: Final = "outdoor_dew_point"
 TEMPERATURE_ADVANTAGE: Final = "temperature_advantage"
+UNOCCUPIED_FOR: Final = "unoccupied_for"
 
 _INDOOR_TEMPERATURE: Final = "indoor_temperature"
 _OUTDOOR_TEMPERATURE: Final = "outdoor_temperature"
 _OUTDOOR_HUMIDITY: Final = "outdoor_humidity"
+_OCCUPANCY: Final = "occupancy"
 
 # Sonntag 1990, in Celsius. Home Assistant's own mold_indicator uses these.
 _MAGNUS_B: Final = 17.62
@@ -34,6 +40,7 @@ _MAGNUS_C: Final = 243.12
 
 _CELSIUS: Final = UnitOfTemperature.CELSIUS
 _PERCENT: Final = "%"
+_SECONDS: Final = UnitOfTime.SECONDS
 
 
 class _UnderivableError(Exception):
@@ -126,7 +133,9 @@ _DERIVATIONS: Final = (
     ),
 )
 
-DERIVED_KEYS: Final = frozenset(derivation.key for derivation in _DERIVATIONS)
+DERIVED_KEYS: Final = frozenset(
+    {derivation.key for derivation in _DERIVATIONS} | {UNOCCUPIED_FOR}
+)
 
 
 def _inherited(
@@ -187,15 +196,93 @@ def _derive(
     return Observation.reading(derivation.key, value, unit=unit)
 
 
+@dataclass(frozen=True, slots=True)
+class VacancyState:
+    """When one room was last known to have become empty.
+
+    Held by the caller between evaluations, because elapsed time is the one
+    thing a snapshot cannot read from the house. `None` means the room is not
+    counting: it is occupied, or its occupancy cannot be read.
+    """
+
+    unoccupied_since: datetime | None = None
+
+
+def _vacancy(
+    observations: Observations, state: VacancyState, now: datetime
+) -> tuple[Observation, VacancyState]:
+    """Advance the vacancy clock, returning how long the room has been empty.
+
+    An occupancy reading that cannot be read stops the clock and clears it. On
+    recovery the count starts again, because nothing rules out the room having
+    been entered while it could not be seen.
+    """
+    occupancy = _source(observations, _OCCUPANCY)
+    inherited = _inherited((occupancy,))
+    if inherited is not None:
+        reason, source_entity_id = inherited
+        return (
+            Observation.missing(
+                UNOCCUPIED_FOR,
+                reason,
+                unit=_SECONDS,
+                source_entity_id=source_entity_id,
+            ),
+            VacancyState(),
+        )
+
+    since = state.unoccupied_since
+    if occupancy.value or since is None or now < since:
+        since = now
+    return (
+        Observation.reading(
+            UNOCCUPIED_FOR,
+            (now - since).total_seconds(),
+            unit=_SECONDS,
+            source_entity_id=occupancy.source_entity_id,
+        ),
+        VacancyState(None if occupancy.value else since),
+    )
+
+
+def next_wake_up(
+    state: VacancyState, durations: Iterable[timedelta], now: datetime
+) -> datetime | None:
+    """Return when `unoccupied_for` next crosses one of these durations.
+
+    No state change occurs at minute fifteen, so a room that has gone quiet
+    must be looked at again on a timer. `None` means nothing is counting or
+    every boundary is already behind us.
+    """
+    since = state.unoccupied_since
+    if since is None:
+        return None
+    return min(
+        (
+            boundary
+            for boundary in (since + duration for duration in durations)
+            if boundary > now
+        ),
+        default=None,
+    )
+
+
 def derive_observations(
-    observations: Observations, *, uncertainty_margin: float = 0.0
-) -> Observations:
-    """Return the snapshot with its derived observations added.
+    observations: Observations,
+    state: VacancyState,
+    now: datetime,
+    *,
+    uncertainty_margin: float = 0.0,
+) -> tuple[Observations, VacancyState]:
+    """Return the snapshot with its derived observations added, and the new state.
 
     `uncertainty_margin` is the house's allowance for an inaccurate outdoor
-    source, in the unit the readings carry.
+    source, in the unit the readings carry. `state` and `now` are what the
+    vacancy clock needs; both come back so the caller keeps one memory per
+    room and no derivation reads a clock of its own.
     """
     derived = dict(observations)
     for derivation in _DERIVATIONS:
         derived[derivation.key] = _derive(derivation, observations, uncertainty_margin)
-    return Observations(derived, observations.groups)
+    derived[UNOCCUPIED_FOR], state = _vacancy(observations, state, now)
+    return Observations(derived, observations.groups), state
