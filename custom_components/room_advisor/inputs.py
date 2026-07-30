@@ -49,24 +49,37 @@ class RoomInput(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class InputSpec:
-    """What a room input accepts, and how many entities it holds."""
+    """What a room input accepts, what it proposes, and how many it holds.
+
+    Accepting and proposing are different questions. The picker accepts every
+    entity the observation layer can read, because a contact sensor with no
+    device class is still a contact sensor. The area scan proposes only
+    entities whose device class says what they are, because a proposal the user
+    has to undo is worse than no proposal.
+    """
 
     key: RoomInput
-    filters: tuple[EntityFilterSelectorConfig, ...]
+    accepts: tuple[EntityFilterSelectorConfig, ...]
+    suggests: tuple[EntityFilterSelectorConfig, ...] | None = None
     multiple: bool = False
+
+    @property
+    def suggested(self) -> tuple[EntityFilterSelectorConfig, ...]:
+        """Return the filters the area scan proposes from."""
+        return self.accepts if self.suggests is None else self.suggests
 
     def selector(self) -> EntitySelector:
         """Build the picker this input is offered through."""
         return EntitySelector(
-            EntitySelectorConfig(filter=list(self.filters), multiple=self.multiple)
+            EntitySelectorConfig(filter=list(self.accepts), multiple=self.multiple)
         )
 
     def matches(self, domain: str, device_class: str | None) -> bool:
-        """Return whether an entity is a candidate for this input.
+        """Return whether an entity is worth proposing for this input.
 
-        Matches on domain and device class, which is what every input here
-        filters on. A filter that narrowed further would need this to narrow
-        with it, or the flow would suggest an entity its own picker rejects.
+        Matches on domain and device class, which is what every filter here
+        narrows on. A filter that narrowed further would need this to narrow
+        with it.
         """
         return any(
             domain in _as_list(entity_filter["domain"])
@@ -74,7 +87,7 @@ class InputSpec:
                 "device_class" not in entity_filter
                 or device_class in _as_list(entity_filter["device_class"])
             )
-            for entity_filter in self.filters
+            for entity_filter in self.suggested
         )
 
 
@@ -86,19 +99,24 @@ def _as_list(value: str | list[str]) -> list[str]:
 ROOM_INPUTS: Final[tuple[InputSpec, ...]] = (
     InputSpec(
         key=RoomInput.INDOOR_TEMPERATURE,
-        filters=(
+        accepts=(
             EntityFilterSelectorConfig(domain="sensor", device_class="temperature"),
         ),
     ),
     InputSpec(
         key=RoomInput.INDOOR_CO2,
-        filters=(
+        accepts=(
             EntityFilterSelectorConfig(domain="sensor", device_class="carbon_dioxide"),
         ),
     ),
     InputSpec(
         key=RoomInput.OCCUPANCY,
-        filters=(
+        accepts=(
+            EntityFilterSelectorConfig(
+                domain=["binary_sensor", "input_boolean", "person"]
+            ),
+        ),
+        suggests=(
             EntityFilterSelectorConfig(
                 domain="binary_sensor",
                 device_class=["occupancy", "motion", "presence"],
@@ -107,7 +125,12 @@ ROOM_INPUTS: Final[tuple[InputSpec, ...]] = (
     ),
     InputSpec(
         key=RoomInput.WINDOW_CONTACTS,
-        filters=(
+        accepts=(
+            EntityFilterSelectorConfig(
+                domain=["binary_sensor", "input_boolean", "switch"]
+            ),
+        ),
+        suggests=(
             EntityFilterSelectorConfig(
                 domain="binary_sensor",
                 device_class=["window", "door", "opening"],
@@ -117,16 +140,22 @@ ROOM_INPUTS: Final[tuple[InputSpec, ...]] = (
     ),
     InputSpec(
         key=RoomInput.LIGHTS,
-        filters=(EntityFilterSelectorConfig(domain="light"),),
+        accepts=(
+            EntityFilterSelectorConfig(domain=["light", "switch", "input_boolean"]),
+        ),
+        suggests=(EntityFilterSelectorConfig(domain="light"),),
         multiple=True,
     ),
     InputSpec(
         key=RoomInput.FAN,
-        filters=(EntityFilterSelectorConfig(domain="fan"),),
+        accepts=(
+            EntityFilterSelectorConfig(domain=["fan", "switch", "input_boolean"]),
+        ),
+        suggests=(EntityFilterSelectorConfig(domain="fan"),),
     ),
     InputSpec(
         key=RoomInput.HVAC,
-        filters=(EntityFilterSelectorConfig(domain="climate"),),
+        accepts=(EntityFilterSelectorConfig(domain="climate"),),
     ),
 )
 
@@ -187,7 +216,8 @@ def suggest_room_inputs(
     The flow shows these pre-selected and the user confirms or clears each;
     nothing is stored until it is submitted. A single-entity input is suggested
     only when the area offers exactly one candidate, since any other number is
-    a choice.
+    a choice. Proposing is narrower than accepting: only an entity whose device
+    class says what it is gets proposed.
     """
     if area_id is None:
         return {}
