@@ -28,7 +28,7 @@ from custom_components.room_advisor.const import (
     DOMAIN,
     SUBENTRY_TYPE_ROOM,
 )
-from custom_components.room_advisor.inputs import CONF_INPUTS, RoomInput
+from custom_components.room_advisor.inputs import CONF_INPUTS, InputKey
 
 
 async def _setup_hub(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
@@ -137,6 +137,11 @@ def _suggested(result: dict[str, Any]) -> dict[str, Any]:
         for marker in result["data_schema"].schema
         if marker.description and "suggested_value" in marker.description
     }
+
+
+def _fields(result: dict[str, Any]) -> list[str]:
+    """Read back the fields a form offers, in the order it offers them."""
+    return [str(marker.schema) for marker in result["data_schema"].schema]
 
 
 async def test_add_room_stores_a_name_and_an_area(
@@ -613,21 +618,45 @@ async def test_a_room_stores_the_entities_it_reads(
         config_entry,
         name="Office",
         inputs={
-            RoomInput.INDOOR_TEMPERATURE: "sensor.office_temperature",
-            RoomInput.WINDOW_CONTACTS: [
+            InputKey.INDOOR_TEMPERATURE: "sensor.office_temperature",
+            InputKey.WINDOW_CONTACTS: [
                 "binary_sensor.office_left",
                 "binary_sensor.office_right",
             ],
         },
     )
 
-    assert dict(config_entry.subentries[subentry_id].data)[CONF_INPUTS] == {
-        RoomInput.INDOOR_TEMPERATURE: "sensor.office_temperature",
-        RoomInput.WINDOW_CONTACTS: [
+    assert dict(config_entry.subentries[subentry_id].data)["inputs"] == {
+        "indoor_temperature": "sensor.office_temperature",
+        "window_contacts": [
             "binary_sensor.office_left",
             "binary_sensor.office_right",
         ],
     }
+
+
+async def test_the_entity_step_offers_exactly_the_room_inputs(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A room is asked for its own entities and no others.
+
+    The field names are the stored keys, so this is also where the room half of
+    the vocabulary is pinned to the form that writes it.
+    """
+    await _setup_hub(hass, config_entry)
+
+    result = await _submit_new_room(hass, config_entry, {CONF_NAME: "Office"})
+
+    assert result["step_id"] == "inputs"
+    assert _fields(result) == [
+        "indoor_temperature",
+        "indoor_co2",
+        "occupancy",
+        "window_contacts",
+        "lights",
+        "fan",
+        "hvac",
+    ]
 
 
 async def test_the_entity_step_suggests_what_the_area_holds(
@@ -646,8 +675,8 @@ async def test_the_entity_step_suggests_what_the_area_holds(
 
     assert result["step_id"] == "inputs"
     assert _suggested(result) == {
-        RoomInput.INDOOR_TEMPERATURE: "sensor.office_temperature",
-        RoomInput.WINDOW_CONTACTS: ["binary_sensor.office_window"],
+        InputKey.INDOOR_TEMPERATURE: "sensor.office_temperature",
+        InputKey.WINDOW_CONTACTS: ["binary_sensor.office_window"],
     }
 
 
@@ -723,7 +752,7 @@ async def test_a_room_from_before_the_entity_step_is_offered_suggestions(
     )
 
     assert _suggested(result) == {
-        RoomInput.INDOOR_TEMPERATURE: "sensor.office_temperature"
+        InputKey.INDOOR_TEMPERATURE: "sensor.office_temperature"
     }
 
 
@@ -736,14 +765,14 @@ async def test_editing_a_room_replaces_its_entities(
         hass,
         config_entry,
         name="Office",
-        inputs={RoomInput.LIGHTS: ["light.desk", "light.floor"]},
+        inputs={InputKey.LIGHTS: ["light.desk", "light.floor"]},
     )
 
     result = await _reconfigure_room(
-        hass, config_entry, subentry_id, {}, inputs={RoomInput.LIGHTS: ["light.desk"]}
+        hass, config_entry, subentry_id, {}, inputs={InputKey.LIGHTS: ["light.desk"]}
     )
 
     assert result["type"] is FlowResultType.ABORT
     assert config_entry.subentries[subentry_id].data[CONF_INPUTS] == {
-        RoomInput.LIGHTS: ["light.desk"]
+        InputKey.LIGHTS: ["light.desk"]
     }

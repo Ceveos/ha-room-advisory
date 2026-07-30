@@ -1,16 +1,20 @@
-"""The entities a room reads, and how they are offered in the config flow.
+"""The entities Room Advisor reads, and how they are offered in the config flow.
 
-This module is the single source of truth for the input vocabulary: the keys a
-room stores, the entities each key will accept, and which keys hold several
-entities. The observation layer builds its snapshot from these same keys, so a
-key added here is the one place it is named.
+This module is the single source of truth for the input vocabulary: the keys
+that are stored, the entities each key will accept, which keys hold several
+entities, and whether a key belongs to the house or to one room. The
+observation layer builds its snapshot from these same keys, so a key added here
+is the one place it is named.
+
+House and room inputs share one vocabulary and one stored shape. They differ
+only in where they are written and in what offers them.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum, StrEnum, auto
 from typing import Any, Final
 
 import voluptuous as vol
@@ -24,7 +28,7 @@ from homeassistant.helpers.selector import (
 )
 
 CONF_INPUTS: Final = "inputs"
-"""Where a room stores its entities, keyed by `RoomInput`.
+"""Where entities are stored: a room's subentry data, the hub's options.
 
 Absent, or absent for a given key, means the input is not configured. That is
 an ordinary state, not an error: every input is optional and missing ones
@@ -32,12 +36,28 @@ disable only the rules that require them.
 """
 
 
-class RoomInput(StrEnum):
-    """An entity a room reads.
+class InputScope(Enum):
+    """Who an input belongs to.
+
+    A shared input is configured once for the house. A room input is
+    configured per room.
+    """
+
+    SHARED = auto()
+    ROOM = auto()
+
+
+class InputKey(StrEnum):
+    """An entity Room Advisor reads.
 
     The values are stored in configuration, so renaming one is a migration.
     """
 
+    OUTDOOR_TEMPERATURE = "outdoor_temperature"
+    OUTDOOR_HUMIDITY = "outdoor_humidity"
+    OUTDOOR_AIR_QUALITY = "outdoor_air_quality"
+    RAIN_RISK = "rain_risk"
+    AWAY = "away"
     INDOOR_TEMPERATURE = "indoor_temperature"
     INDOOR_CO2 = "indoor_co2"
     OCCUPANCY = "occupancy"
@@ -49,7 +69,7 @@ class RoomInput(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class InputSpec:
-    """What a room input accepts, what it proposes, and how many it holds.
+    """What an input accepts, what it proposes, and how many it holds.
 
     Accepting and proposing are different questions. The picker accepts every
     entity the observation layer can read, because a contact sensor with no
@@ -58,7 +78,8 @@ class InputSpec:
     has to undo is worse than no proposal.
     """
 
-    key: RoomInput
+    key: InputKey
+    scope: InputScope
     accepts: tuple[EntityFilterSelectorConfig, ...]
     suggests: tuple[EntityFilterSelectorConfig, ...] | None = None
     multiple: bool = False
@@ -96,21 +117,70 @@ def _as_list(value: str | list[str]) -> list[str]:
     return [value] if isinstance(value, str) else value
 
 
-ROOM_INPUTS: Final[tuple[InputSpec, ...]] = (
+INPUTS: Final[tuple[InputSpec, ...]] = (
     InputSpec(
-        key=RoomInput.INDOOR_TEMPERATURE,
+        key=InputKey.OUTDOOR_TEMPERATURE,
+        scope=InputScope.SHARED,
+        accepts=(
+            EntityFilterSelectorConfig(domain="sensor", device_class="temperature"),
+            EntityFilterSelectorConfig(domain="weather"),
+        ),
+    ),
+    InputSpec(
+        key=InputKey.OUTDOOR_HUMIDITY,
+        scope=InputScope.SHARED,
+        accepts=(
+            EntityFilterSelectorConfig(domain="sensor", device_class="humidity"),
+            EntityFilterSelectorConfig(domain="weather"),
+        ),
+    ),
+    InputSpec(
+        key=InputKey.OUTDOOR_AIR_QUALITY,
+        scope=InputScope.SHARED,
+        accepts=(EntityFilterSelectorConfig(domain="sensor"),),
+    ),
+    InputSpec(
+        key=InputKey.RAIN_RISK,
+        scope=InputScope.SHARED,
+        accepts=(
+            EntityFilterSelectorConfig(
+                domain=["binary_sensor", "input_boolean", "switch"]
+            ),
+        ),
+    ),
+    InputSpec(
+        key=InputKey.AWAY,
+        scope=InputScope.SHARED,
+        accepts=(
+            EntityFilterSelectorConfig(
+                domain=[
+                    "alarm_control_panel",
+                    "binary_sensor",
+                    "device_tracker",
+                    "input_boolean",
+                    "person",
+                ]
+            ),
+        ),
+        multiple=True,
+    ),
+    InputSpec(
+        key=InputKey.INDOOR_TEMPERATURE,
+        scope=InputScope.ROOM,
         accepts=(
             EntityFilterSelectorConfig(domain="sensor", device_class="temperature"),
         ),
     ),
     InputSpec(
-        key=RoomInput.INDOOR_CO2,
+        key=InputKey.INDOOR_CO2,
+        scope=InputScope.ROOM,
         accepts=(
             EntityFilterSelectorConfig(domain="sensor", device_class="carbon_dioxide"),
         ),
     ),
     InputSpec(
-        key=RoomInput.OCCUPANCY,
+        key=InputKey.OCCUPANCY,
+        scope=InputScope.ROOM,
         accepts=(
             EntityFilterSelectorConfig(
                 domain=["binary_sensor", "input_boolean", "person"]
@@ -124,7 +194,8 @@ ROOM_INPUTS: Final[tuple[InputSpec, ...]] = (
         ),
     ),
     InputSpec(
-        key=RoomInput.WINDOW_CONTACTS,
+        key=InputKey.WINDOW_CONTACTS,
+        scope=InputScope.ROOM,
         accepts=(
             EntityFilterSelectorConfig(
                 domain=["binary_sensor", "input_boolean", "switch"]
@@ -139,7 +210,8 @@ ROOM_INPUTS: Final[tuple[InputSpec, ...]] = (
         multiple=True,
     ),
     InputSpec(
-        key=RoomInput.LIGHTS,
+        key=InputKey.LIGHTS,
+        scope=InputScope.ROOM,
         accepts=(
             EntityFilterSelectorConfig(domain=["light", "switch", "input_boolean"]),
         ),
@@ -147,30 +219,39 @@ ROOM_INPUTS: Final[tuple[InputSpec, ...]] = (
         multiple=True,
     ),
     InputSpec(
-        key=RoomInput.FAN,
+        key=InputKey.FAN,
+        scope=InputScope.ROOM,
         accepts=(
             EntityFilterSelectorConfig(domain=["fan", "switch", "input_boolean"]),
         ),
         suggests=(EntityFilterSelectorConfig(domain="fan"),),
     ),
     InputSpec(
-        key=RoomInput.HVAC,
+        key=InputKey.HVAC,
+        scope=InputScope.ROOM,
         accepts=(EntityFilterSelectorConfig(domain="climate"),),
     ),
 )
+"""Every input, in the order its form offers it."""
+
+SHARED_INPUTS: Final = tuple(spec for spec in INPUTS if spec.scope is InputScope.SHARED)
+"""The house inputs, configured once on the hub."""
+
+ROOM_INPUTS: Final = tuple(spec for spec in INPUTS if spec.scope is InputScope.ROOM)
+"""The inputs configured per room."""
 
 
-def room_inputs_schema() -> vol.Schema:
-    """Build the form a room's entities are chosen on.
+def inputs_schema(specs: Sequence[InputSpec]) -> vol.Schema:
+    """Build the form a set of entities is chosen on.
 
     Every field is optional, because every input is.
     """
-    return vol.Schema(
-        {vol.Optional(spec.key.value): spec.selector() for spec in ROOM_INPUTS}
-    )
+    return vol.Schema({vol.Optional(spec.key.value): spec.selector() for spec in specs})
 
 
-def clean_room_inputs(user_input: Mapping[str, Any]) -> dict[str, str | list[str]]:
+def clean_inputs(
+    user_input: Mapping[str, Any], specs: Sequence[InputSpec]
+) -> dict[str, str | list[str]]:
     """Reduce a submitted form to what is worth storing.
 
     Cleared fields are dropped rather than stored empty, so "not configured"
@@ -178,7 +259,7 @@ def clean_room_inputs(user_input: Mapping[str, Any]) -> dict[str, str | list[str
     keeping the order the user chose.
     """
     cleaned: dict[str, str | list[str]] = {}
-    for spec in ROOM_INPUTS:
+    for spec in specs:
         value = user_input.get(spec.key.value)
         if spec.multiple:
             entity_ids = _unique(value if isinstance(value, list) else [])
@@ -194,7 +275,7 @@ def _unique(entity_ids: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(entity_id for entity_id in entity_ids if entity_id))
 
 
-def entity_ids(inputs: Mapping[str, Any], key: RoomInput) -> list[str]:
+def entity_ids(inputs: Mapping[str, Any], key: InputKey) -> list[str]:
     """Read one input as a list, whether or not it holds several entities.
 
     Callers that only ever want entities, such as diagnostics and the
@@ -222,7 +303,7 @@ def suggest_room_inputs(
     if area_id is None:
         return {}
 
-    candidates: dict[RoomInput, list[str]] = {spec.key: [] for spec in ROOM_INPUTS}
+    candidates: dict[InputKey, list[str]] = {spec.key: [] for spec in ROOM_INPUTS}
     for entity in _area_entities(hass, area_id):
         domain = entity.entity_id.partition(".")[0]
         device_class = entity.device_class or entity.original_device_class
