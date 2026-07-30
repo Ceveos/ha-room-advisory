@@ -10,12 +10,11 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 
-from .const import CONF_AREA_ID, DOMAIN, NAME, PLATFORMS, SUBENTRY_TYPE_ROOM
+from .const import CONF_AREA_ID, DOMAIN, PLATFORMS, SUBENTRY_TYPE_ROOM
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,6 +45,16 @@ async def _async_config_updated(hass: HomeAssistant, entry: ConfigEntry) -> None
 def _async_register_room_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Give every room a device, filed in its area if it has one.
 
+    The device is named after the subentry, which is the room's name, so
+    Home Assistant's own rename reaches the device on the next reload.
+
+    It carries no model and no manufacturer. Home Assistant builds a device
+    row's subtext from the first of model, software version and manufacturer
+    that is set, followed by the area, so anything set here is printed under a
+    heading that already gives the room's name. Both are cleared on every
+    setup rather than merely left unset, because omitting a field from
+    ``async_get_or_create`` leaves an existing device's value alone.
+
     An area the user has deleted counts as no area: Home Assistant clears the
     device's area when the area goes, and writing the stored id back would undo
     that. Removing a room needs no counterpart here for the same reason — Home
@@ -56,19 +65,22 @@ def _async_register_room_devices(hass: HomeAssistant, entry: ConfigEntry) -> Non
     for subentry_id, subentry in entry.subentries.items():
         if subentry.subentry_type != SUBENTRY_TYPE_ROOM:
             continue
-        name: str = subentry.data[CONF_NAME]
+        name = subentry.title
         device = device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             config_subentry_id=subentry_id,
             identifiers={(DOMAIN, subentry_id)},
-            manufacturer=NAME,
-            model="Room",
+            entry_type=dr.DeviceEntryType.SERVICE,
             name=name,
         )
         area_id: str | None = subentry.data.get(CONF_AREA_ID)
         if area_id is not None and area_registry.async_get_area(area_id) is None:
             area_id = None
         if area_id is None:
-            device_registry.async_update_device(device.id, name=name)
+            device_registry.async_update_device(
+                device.id, name=name, manufacturer=None, model=None
+            )
         else:
-            device_registry.async_update_device(device.id, name=name, area_id=area_id)
+            device_registry.async_update_device(
+                device.id, name=name, manufacturer=None, model=None, area_id=area_id
+            )

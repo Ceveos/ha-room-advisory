@@ -8,20 +8,51 @@ cd "$(dirname "$0")/.."
 python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 
-# The frontend is the one Home Assistant dependency a development instance
-# cannot do without, and it ships separately from the core package. Install the
-# exact version Home Assistant asks for, read from its own manifest, so the two
-# cannot drift and this file needs no pin of its own.
+# A few Home Assistant integrations ship separately from the core package but a
+# development instance cannot do without them: the frontend, and the "base
+# components" Home Assistant force-imports the first time it validates a
+# service description — which the frontend does on every page load, failing the
+# whole websocket connection if any of them cannot be imported. `hass` runs with
+# --skip-pip and will not install them for us.
+#
+# Take the pins from Home Assistant's own manifests so they cannot drift from
+# the installed version and this repository needs no pins of its own.
 python - <<'PY'
+import ast
+import inspect
 import json
 import pathlib
 import subprocess
 import sys
 
 import homeassistant
+from homeassistant.helpers import service
 
 components = pathlib.Path(homeassistant.__file__).parent / "components"
-manifest = components / "frontend" / "manifest.json"
-(requirement,) = json.loads(manifest.read_text())["requirements"]
-subprocess.check_call([sys.executable, "-m", "pip", "install", requirement])
+
+tree = ast.parse(inspect.getsource(service._base_components))
+base_components = [
+    alias.name
+    for node in ast.walk(tree)
+    if isinstance(node, ast.ImportFrom)
+    for alias in node.names
+]
+# _base_components is private: if a Home Assistant upgrade reshapes it, say so
+# here rather than quietly installing nothing and failing again at runtime.
+if not base_components:
+    sys.exit("Could not read the base components from homeassistant.helpers.service")
+
+seen: set[str] = set()
+requirements: set[str] = set()
+domains = ["frontend", *base_components]
+while domains:
+    domain = domains.pop()
+    if domain in seen:
+        continue
+    seen.add(domain)
+    manifest = json.loads((components / domain / "manifest.json").read_text())
+    requirements.update(manifest.get("requirements", []))
+    domains.extend(manifest.get("dependencies", []))
+
+subprocess.check_call([sys.executable, "-m", "pip", "install", *sorted(requirements)])
 PY

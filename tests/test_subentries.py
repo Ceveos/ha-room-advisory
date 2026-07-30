@@ -20,6 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.room_advisor.const import (
@@ -27,6 +28,7 @@ from custom_components.room_advisor.const import (
     DOMAIN,
     SUBENTRY_TYPE_ROOM,
 )
+from custom_components.room_advisor.inputs import CONF_INPUTS, RoomInput
 
 
 async def _setup_hub(hass: HomeAssistant, config_entry: MockConfigEntry) -> None:
@@ -39,7 +41,7 @@ async def _setup_hub(hass: HomeAssistant, config_entry: MockConfigEntry) -> None
 async def _submit_new_room(
     hass: HomeAssistant, entry: ConfigEntry, user_input: dict[str, Any]
 ) -> dict[str, Any]:
-    """Run the add-room flow to completion and return the result."""
+    """Submit the first step of the add-room flow and return where it lands."""
     result = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_TYPE_ROOM), context={"source": SOURCE_USER}
     )
@@ -52,12 +54,60 @@ async def _submit_new_room(
     return dict(result)
 
 
-async def _add_room(hass: HomeAssistant, entry: ConfigEntry, **user_input: str) -> str:
+async def _submit_inputs(
+    hass: HomeAssistant, flow_id: str, inputs: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Submit the entity step, which is where a room flow finishes."""
+    result = await hass.config_entries.subentries.async_configure(flow_id, inputs or {})
+    await hass.async_block_till_done()
+    return dict(result)
+
+
+async def _add_room(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    inputs: dict[str, Any] | None = None,
+    **user_input: str,
+) -> str:
     """Add a room and return its subentry id."""
     before = set(entry.subentries)
     result = await _submit_new_room(hass, entry, user_input)
+    assert result["step_id"] == "inputs"
+    result = await _submit_inputs(hass, result["flow_id"], inputs)
     assert result["type"] is FlowResultType.CREATE_ENTRY
     return next(iter(set(entry.subentries) - before))
+
+
+async def _start_reconfigure(
+    hass: HomeAssistant, entry: ConfigEntry, subentry_id: str
+) -> dict[str, Any]:
+    """Open the edit-room flow on its first step."""
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_ROOM),
+        context={"source": SOURCE_RECONFIGURE, "subentry_id": subentry_id},
+    )
+    assert result["type"] is FlowResultType.FORM
+    return dict(result)
+
+
+async def _reconfigure_room(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    subentry_id: str,
+    user_input: dict[str, Any],
+    inputs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run the edit-room flow to completion and return where it lands."""
+    result = await _start_reconfigure(hass, entry, subentry_id)
+    result = dict(
+        await hass.config_entries.subentries.async_configure(
+            result["flow_id"], user_input
+        )
+    )
+    await hass.async_block_till_done()
+    if result["type"] is not FlowResultType.FORM or result["step_id"] != "inputs":
+        return result
+    return await _submit_inputs(hass, result["flow_id"], inputs)
 
 
 def _device_for(hass: HomeAssistant, subentry_id: str) -> dr.DeviceEntry | None:
@@ -65,10 +115,34 @@ def _device_for(hass: HomeAssistant, subentry_id: str) -> dr.DeviceEntry | None:
     return dr.async_get(hass).async_get_device({(DOMAIN, subentry_id)})
 
 
+def _register_entity(
+    hass: HomeAssistant, entity_id: str, device_class: str, area_id: str
+) -> None:
+    """Put an entity in an area so the room flow can suggest it."""
+    domain, _, object_id = entity_id.partition(".")
+    entry = er.async_get(hass).async_get_or_create(
+        domain,
+        "test",
+        object_id,
+        suggested_object_id=object_id,
+        original_device_class=device_class,
+    )
+    er.async_get(hass).async_update_entity(entry.entity_id, area_id=area_id)
+
+
+def _suggested(result: dict[str, Any]) -> dict[str, Any]:
+    """Read back what a form opened with."""
+    return {
+        marker.schema: marker.description["suggested_value"]
+        for marker in result["data_schema"].schema
+        if marker.description and "suggested_value" in marker.description
+    }
+
+
 async def test_add_room_stores_a_name_and_an_area(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A room stores a name and the area it was drawn from."""
+    """A room is named by its subentry title and stores the area it came from."""
     area = ar.async_get(hass).async_create("Office")
     await _setup_hub(hass, config_entry)
 
@@ -77,7 +151,7 @@ async def test_add_room_stores_a_name_and_an_area(
 
     assert subentry.subentry_type == SUBENTRY_TYPE_ROOM
     assert subentry.title == "Office"
-    assert dict(subentry.data) == {CONF_NAME: "Office", CONF_AREA_ID: area.id}
+    assert dict(subentry.data) == {CONF_AREA_ID: area.id, CONF_INPUTS: {}}
 
 
 async def test_a_room_may_be_named_instead_of_its_area(
@@ -106,8 +180,8 @@ async def test_a_room_need_not_have_an_area(
     subentry_id = await _add_room(hass, config_entry, name="Great Room")
 
     assert dict(config_entry.subentries[subentry_id].data) == {
-        CONF_NAME: "Great Room",
         CONF_AREA_ID: None,
+        CONF_INPUTS: {},
     }
     device = _device_for(hass, subentry_id)
     assert device is not None
@@ -200,52 +274,108 @@ async def test_room_names_are_compared_the_way_areas_are(
     assert len(config_entry.subentries) == 1
 
 
-async def test_reconfigure_may_keep_the_rooms_current_name(
+async def test_configuring_a_room_moves_it_between_areas(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A room does not collide with itself."""
+    """The area is a room setting, so the flow is where it changes.
+
+    The room's title is not the flow's to touch.
+    """
     area_registry = ar.async_get(hass)
     office = area_registry.async_create("Office")
     study = area_registry.async_create("Study")
     await _setup_hub(hass, config_entry)
     subentry_id = await _add_room(hass, config_entry, area_id=office.id, name="Desk")
 
-    result = await hass.config_entries.subentries.async_init(
-        (config_entry.entry_id, SUBENTRY_TYPE_ROOM),
-        context={"source": SOURCE_RECONFIGURE, "subentry_id": subentry_id},
+    result = await _reconfigure_room(
+        hass, config_entry, subentry_id, {CONF_AREA_ID: study.id}
     )
-    result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], {CONF_AREA_ID: study.id, CONF_NAME: "Desk"}
-    )
-    await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
+    assert config_entry.subentries[subentry_id].title == "Desk"
     assert dict(config_entry.subentries[subentry_id].data) == {
-        CONF_NAME: "Desk",
         CONF_AREA_ID: study.id,
+        CONF_INPUTS: {},
     }
 
 
-async def test_reconfigure_rejects_another_rooms_name(
+async def test_configuring_a_room_offers_no_name_field(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A room cannot be renamed onto a name already in use."""
+    """Home Assistant renames a room, so the flow does not offer to."""
     await _setup_hub(hass, config_entry)
     subentry_id = await _add_room(hass, config_entry, name="Office")
-    await _add_room(hass, config_entry, name="Study")
 
-    result = await hass.config_entries.subentries.async_init(
-        (config_entry.entry_id, SUBENTRY_TYPE_ROOM),
-        context={"source": SOURCE_RECONFIGURE, "subentry_id": subentry_id},
-    )
-    result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], {CONF_NAME: "Study"}
-    )
+    result = await _start_reconfigure(hass, config_entry, subentry_id)
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {CONF_NAME: "name_taken"}
-    assert config_entry.subentries[subentry_id].title == "Office"
+    assert [marker.schema for marker in result["data_schema"].schema] == [CONF_AREA_ID]
+
+
+async def test_renaming_a_room_reaches_its_device(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Home Assistant's rename writes the title alone.
+
+    The device is named from the title rather than from stored data, so the
+    two cannot drift apart.
+    """
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, name="Kitchen")
+
+    hass.config_entries.async_update_subentry(
+        config_entry, config_entry.subentries[subentry_id], title="Galley"
+    )
+    await hass.async_block_till_done()
+
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+    assert device.name == "Galley"
+
+
+async def test_a_room_is_a_service_with_no_subtext_of_its_own(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A room's device says nothing the row above it already says.
+
+    Home Assistant prints a device's subtext as the first of model, software
+    version and manufacturer that is set, followed by the area. All three are
+    unset, so the subtext is the area alone.
+    """
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, name="Office")
+
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+    assert device.entry_type is dr.DeviceEntryType.SERVICE
+    assert device.model is None
+    assert device.sw_version is None
+    assert device.manufacturer is None
+
+
+async def test_a_room_device_drops_a_model_and_maker_it_already_carried(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A device from an earlier version is cleared on the next setup.
+
+    Leaving a field out of ``async_get_or_create`` keeps whatever an existing
+    device holds, so both are written as None rather than omitted.
+    """
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, name="Office")
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+
+    dr.async_get(hass).async_update_device(
+        device.id, model="Room", manufacturer="Room Advisor"
+    )
+    assert await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+    assert device.model is None
+    assert device.manufacturer is None
 
 
 async def test_add_room_creates_a_device_in_the_area(
@@ -307,7 +437,7 @@ async def test_a_room_without_an_area_keeps_a_manual_placement(
     assert device.area_id == area.id
 
 
-async def test_reconfigure_renames_the_room_but_keeps_its_identity(
+async def test_renaming_a_room_keeps_its_identity(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
     """Renaming a room keeps its subentry and device.
@@ -320,28 +450,19 @@ async def test_reconfigure_renames_the_room_but_keeps_its_identity(
     original_device = _device_for(hass, subentry_id)
     assert original_device is not None
 
-    result = await hass.config_entries.subentries.async_init(
-        (config_entry.entry_id, SUBENTRY_TYPE_ROOM),
-        context={"source": SOURCE_RECONFIGURE, "subentry_id": subentry_id},
-    )
-    assert result["type"] is FlowResultType.FORM
-
-    result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], {CONF_AREA_ID: area.id, CONF_NAME: "Study"}
+    hass.config_entries.async_update_subentry(
+        config_entry, config_entry.subentries[subentry_id], title="Study"
     )
     await hass.async_block_till_done()
 
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "reconfigure_successful"
     assert config_entry.subentries[subentry_id].title == "Study"
-
     device = _device_for(hass, subentry_id)
     assert device is not None
     assert device.id == original_device.id
     assert device.name == "Study"
 
 
-async def test_reconfigure_moves_the_room_to_another_area(
+async def test_configuring_a_room_re_files_its_device(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
     """Moving a room re-files its device without recreating it."""
@@ -353,14 +474,9 @@ async def test_reconfigure_moves_the_room_to_another_area(
     original_device = _device_for(hass, subentry_id)
     assert original_device is not None
 
-    result = await hass.config_entries.subentries.async_init(
-        (config_entry.entry_id, SUBENTRY_TYPE_ROOM),
-        context={"source": SOURCE_RECONFIGURE, "subentry_id": subentry_id},
+    result = await _reconfigure_room(
+        hass, config_entry, subentry_id, {CONF_AREA_ID: study.id}
     )
-    result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], {CONF_AREA_ID: study.id, CONF_NAME: "Desk"}
-    )
-    await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
     device = _device_for(hass, subentry_id)
@@ -369,24 +485,42 @@ async def test_reconfigure_moves_the_room_to_another_area(
     assert device.area_id == study.id
 
 
-async def test_reconfigure_rejects_an_empty_name_without_an_area(
+async def test_configuring_a_room_may_clear_its_area(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A room cannot be left with nothing to call it."""
+    """A room that no longer matches an area keeps its name and its entities."""
+    area = ar.async_get(hass).async_create("Office")
     await _setup_hub(hass, config_entry)
-    subentry_id = await _add_room(hass, config_entry, name="Great Room")
+    subentry_id = await _add_room(hass, config_entry, area_id=area.id)
 
-    result = await hass.config_entries.subentries.async_init(
-        (config_entry.entry_id, SUBENTRY_TYPE_ROOM),
-        context={"source": SOURCE_RECONFIGURE, "subentry_id": subentry_id},
-    )
-    result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], {CONF_NAME: "   "}
+    result = await _reconfigure_room(hass, config_entry, subentry_id, {})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert config_entry.subentries[subentry_id].title == "Office"
+    assert config_entry.subentries[subentry_id].data[CONF_AREA_ID] is None
+
+
+async def test_configuring_a_room_for_a_deleted_area_is_an_error(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """An area that disappears mid-flow is caught when editing too."""
+    area_registry = ar.async_get(hass)
+    office = area_registry.async_create("Office")
+    doomed = area_registry.async_create("Spare room")
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, area_id=office.id)
+
+    result = await _start_reconfigure(hass, config_entry, subentry_id)
+    area_registry.async_delete(doomed.id)
+    result = dict(
+        await hass.config_entries.subentries.async_configure(
+            result["flow_id"], {CONF_AREA_ID: doomed.id}
+        )
     )
 
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {CONF_NAME: "name_required"}
-    assert config_entry.subentries[subentry_id].title == "Great Room"
+    assert result["errors"] == {CONF_AREA_ID: "unknown_area"}
+    assert config_entry.subentries[subentry_id].data[CONF_AREA_ID] == office.id
 
 
 async def test_deleting_the_area_does_not_leave_the_device_pointing_at_it(
@@ -466,3 +600,150 @@ async def test_a_non_room_subentry_gets_no_device(
 
     subentry_id = next(iter(config_entry.subentries))
     assert _device_for(hass, subentry_id) is None
+
+
+async def test_a_room_stores_the_entities_it_reads(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """The entity step is what a room's configuration is mostly made of."""
+    await _setup_hub(hass, config_entry)
+
+    subentry_id = await _add_room(
+        hass,
+        config_entry,
+        name="Office",
+        inputs={
+            RoomInput.INDOOR_TEMPERATURE: "sensor.office_temperature",
+            RoomInput.WINDOW_CONTACTS: [
+                "binary_sensor.office_left",
+                "binary_sensor.office_right",
+            ],
+        },
+    )
+
+    assert dict(config_entry.subentries[subentry_id].data)[CONF_INPUTS] == {
+        RoomInput.INDOOR_TEMPERATURE: "sensor.office_temperature",
+        RoomInput.WINDOW_CONTACTS: [
+            "binary_sensor.office_left",
+            "binary_sensor.office_right",
+        ],
+    }
+
+
+async def test_the_entity_step_suggests_what_the_area_holds(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A new room opens with its area's entities already selected.
+
+    The suggestion is what makes setup short; the user still confirms it.
+    """
+    area = ar.async_get(hass).async_create("Office")
+    _register_entity(hass, "sensor.office_temperature", "temperature", area.id)
+    _register_entity(hass, "binary_sensor.office_window", "window", area.id)
+    await _setup_hub(hass, config_entry)
+
+    result = await _submit_new_room(hass, config_entry, {CONF_AREA_ID: area.id})
+
+    assert result["step_id"] == "inputs"
+    assert _suggested(result) == {
+        RoomInput.INDOOR_TEMPERATURE: "sensor.office_temperature",
+        RoomInput.WINDOW_CONTACTS: ["binary_sensor.office_window"],
+    }
+
+
+async def test_a_suggestion_is_not_stored_until_it_is_submitted(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """Clearing a suggested entity leaves the room without it.
+
+    Pre-fill is a suggestion, never a silent adoption.
+    """
+    area = ar.async_get(hass).async_create("Office")
+    _register_entity(hass, "sensor.office_temperature", "temperature", area.id)
+    await _setup_hub(hass, config_entry)
+
+    subentry_id = await _add_room(hass, config_entry, area_id=area.id, inputs={})
+
+    assert config_entry.subentries[subentry_id].data[CONF_INPUTS] == {}
+
+
+async def test_editing_a_room_opens_with_what_it_stores(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A room that has been through the entity step is not re-suggested.
+
+    Re-offering the area's entities would quietly undo a deliberate clearing.
+    """
+    area = ar.async_get(hass).async_create("Office")
+    _register_entity(hass, "sensor.office_temperature", "temperature", area.id)
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, area_id=area.id, inputs={})
+
+    result = await _start_reconfigure(hass, config_entry, subentry_id)
+    result = dict(
+        await hass.config_entries.subentries.async_configure(
+            result["flow_id"], {CONF_AREA_ID: area.id}
+        )
+    )
+
+    assert result["step_id"] == "inputs"
+    assert _suggested(result) == {}
+
+
+async def test_a_room_from_before_the_entity_step_is_offered_suggestions(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A room stored without entities has never answered the question.
+
+    Setting the hub up must leave the key absent, because absence is what
+    distinguishes "not asked yet" from "asked, and cleared".
+    """
+    area = ar.async_get(hass).async_create("Office")
+    _register_entity(hass, "sensor.office_temperature", "temperature", area.id)
+    config_entry.add_to_hass(hass)
+    hass.config_entries.async_add_subentry(
+        config_entry,
+        ConfigSubentry(
+            data=MappingProxyType({CONF_AREA_ID: area.id}),
+            subentry_type=SUBENTRY_TYPE_ROOM,
+            title="Office",
+            unique_id=None,
+        ),
+    )
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    subentry_id = next(iter(config_entry.subentries))
+    assert CONF_INPUTS not in config_entry.subentries[subentry_id].data
+
+    result = await _start_reconfigure(hass, config_entry, subentry_id)
+    result = dict(
+        await hass.config_entries.subentries.async_configure(
+            result["flow_id"], {CONF_AREA_ID: area.id}
+        )
+    )
+
+    assert _suggested(result) == {
+        RoomInput.INDOOR_TEMPERATURE: "sensor.office_temperature"
+    }
+
+
+async def test_editing_a_room_replaces_its_entities(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """The entity step submits the whole set, so removals take effect."""
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(
+        hass,
+        config_entry,
+        name="Office",
+        inputs={RoomInput.LIGHTS: ["light.desk", "light.floor"]},
+    )
+
+    result = await _reconfigure_room(
+        hass, config_entry, subentry_id, {}, inputs={RoomInput.LIGHTS: ["light.desk"]}
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert config_entry.subentries[subentry_id].data[CONF_INPUTS] == {
+        RoomInput.LIGHTS: ["light.desk"]
+    }
