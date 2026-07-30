@@ -14,11 +14,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.selector import EntityFilterSelectorConfig
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.room_advisor import inputs as inputs_module
 from custom_components.room_advisor.inputs import (
     ROOM_INPUTS,
+    InputSpec,
     RoomInput,
     clean_room_inputs,
     entity_ids,
@@ -79,13 +81,121 @@ def test_cleaned_inputs_are_json_native() -> None:
     assert json.loads(json.dumps(cleaned)) == cleaned
 
 
+def _as_tuple(value: str | list[str] | None) -> tuple[str, ...]:
+    """Normalise a selector filter field, which may be absent, one, or many."""
+    if value is None:
+        return ()
+    return (value,) if isinstance(value, str) else tuple(value)
+
+
+def _shape(
+    entity_filters: tuple[EntityFilterSelectorConfig, ...],
+) -> list[tuple[tuple[str, ...], tuple[str, ...]]]:
+    """Describe filters as sorted (domains, device classes) pairs.
+
+    An empty device-class tuple is the whole point of a filter that accepts:
+    it means the domain is taken whatever the entity calls itself.
+    """
+    return sorted(
+        (
+            tuple(sorted(_as_tuple(entity_filter["domain"]))),
+            tuple(sorted(_as_tuple(entity_filter.get("device_class")))),
+        )
+        for entity_filter in entity_filters
+    )
+
+
+def _spec(key: RoomInput) -> InputSpec:
+    """Return the spec for one input."""
+    return next(spec for spec in ROOM_INPUTS if spec.key is key)
+
+
 def test_every_filter_names_a_domain() -> None:
     """Suggestion matching reads the domain of every filter."""
     assert all(
         "domain" in entity_filter
         for spec in ROOM_INPUTS
-        for entity_filter in spec.filters
+        for entity_filter in (*spec.accepts, *spec.suggested)
     )
+
+
+def test_what_each_input_accepts_is_what_it_accepts() -> None:
+    """A picker that rejects a working entity is a dead end for the user.
+
+    Both halves are pinned. The domains are what the observation layer promises
+    to read, and the empty device-class tuples are what lets a contact sensor
+    that names no device class be chosen at all.
+    """
+    assert {spec.key.value: _shape(spec.accepts) for spec in ROOM_INPUTS} == {
+        "indoor_temperature": [(("sensor",), ("temperature",))],
+        "indoor_co2": [(("sensor",), ("carbon_dioxide",))],
+        "occupancy": [(("binary_sensor", "input_boolean", "person"), ())],
+        "window_contacts": [(("binary_sensor", "input_boolean", "switch"), ())],
+        "lights": [(("input_boolean", "light", "switch"), ())],
+        "fan": [(("fan", "input_boolean", "switch"), ())],
+        "hvac": [(("climate",), ())],
+    }
+
+
+def test_what_each_input_proposes_is_what_it_proposes() -> None:
+    """Proposing is narrower than accepting, and stays narrow.
+
+    A proposal is only worth making when the entity's device class says which
+    input it belongs to.
+    """
+    assert {spec.key.value: _shape(spec.suggested) for spec in ROOM_INPUTS} == {
+        "indoor_temperature": [(("sensor",), ("temperature",))],
+        "indoor_co2": [(("sensor",), ("carbon_dioxide",))],
+        "occupancy": [(("binary_sensor",), ("motion", "occupancy", "presence"))],
+        "window_contacts": [(("binary_sensor",), ("door", "opening", "window"))],
+        "lights": [(("light",), ())],
+        "fan": [(("fan",), ())],
+        "hvac": [(("climate",), ())],
+    }
+
+
+def test_an_input_never_proposes_what_it_would_reject() -> None:
+    """A proposal the picker refuses could not be submitted."""
+    for spec in ROOM_INPUTS:
+        accepted = {
+            domain
+            for entity_filter in spec.accepts
+            for domain in _as_tuple(entity_filter["domain"])
+        }
+        proposed = {
+            domain
+            for entity_filter in spec.suggested
+            for domain in _as_tuple(entity_filter["domain"])
+        }
+        assert proposed <= accepted, spec.key.value
+
+
+def test_a_contact_with_no_device_class_is_accepted() -> None:
+    """Plenty of contact sensors carry no device class at all.
+
+    They are accepted by the picker and left out of the proposals, because
+    nothing about them says which input they belong to.
+    """
+    contacts = _spec(RoomInput.WINDOW_CONTACTS)
+
+    assert all(
+        "device_class" not in entity_filter for entity_filter in contacts.accepts
+    )
+    assert contacts.matches("binary_sensor", "window")
+    assert not contacts.matches("binary_sensor", None)
+
+
+def test_a_plain_switch_is_accepted_as_a_light_but_never_proposed() -> None:
+    """A light on a switch is common; a switch that is not a light is commoner."""
+    lights = _spec(RoomInput.LIGHTS)
+
+    assert "switch" in {
+        domain
+        for entity_filter in lights.accepts
+        for domain in _as_tuple(entity_filter["domain"])
+    }
+    assert not lights.matches("switch", None)
+    assert lights.matches("light", None)
 
 
 def test_every_field_is_optional() -> None:
@@ -187,7 +297,7 @@ async def test_no_area_means_no_suggestions(hass: HomeAssistant) -> None:
 async def test_suggestions_match_domain_and_device_class(
     hass: HomeAssistant,
 ) -> None:
-    """Only entities the picker would have accepted are suggested."""
+    """Only entities whose device class says what they are get proposed."""
     area = ar.async_get(hass).async_create("Office")
     _register(hass, "sensor.temperature", device_class="temperature", area_id=area.id)
     _register(hass, "sensor.power", device_class="power", area_id=area.id)
