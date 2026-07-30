@@ -8,6 +8,7 @@ here rather than assumed.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import timedelta
 from typing import Any, Final
@@ -46,6 +47,9 @@ GROUPS: Final[dict[str, tuple[str, ...]]] = {
 SOURCES: Final[dict[str, str]] = {
     "away": "alarm_control_panel.home",
     "rain_risk": "binary_sensor.rain_expected",
+    "outdoor_air_quality": "sensor.outdoor_aqi",
+    "indoor_temperature": "sensor.room_temperature",
+    "hvac_conditioning": "climate.thermostat",
 }
 """The entity a reading came from, where a rule reports one."""
 
@@ -73,8 +77,9 @@ def snapshot(
 ) -> RecordingObservations:
     """Build a room in which every input reads, then apply the overrides.
 
-    A value of `None` marks an input unusable, which is how a test says "this
-    room's sensor is dead" without restating the twelve that are fine.
+    A value of `None` marks an input unavailable, and an `UnusableReason`
+    marks it unusable for that reason, which is how a test says "this room's
+    sensor is dead" without restating the twelve that are fine.
     """
     values = READINGS | (readings or {})
     return RecordingObservations(
@@ -86,6 +91,8 @@ def snapshot(
                     source_entity_id=SOURCES.get(key),
                 )
                 if value is None
+                else Observation.missing(key, value, source_entity_id=SOURCES.get(key))
+                if isinstance(value, UnusableReason)
                 else Observation.reading(key, value, source_entity_id=SOURCES.get(key))
             )
             for key, value in values.items()
@@ -103,30 +110,63 @@ def without_source(obs: RecordingObservations, key: str) -> RecordingObservation
 
 
 class AnySettings(RoomSettings):
-    """A room configured for whatever setting a rule asks for.
+    """A room configured for whatever setting a rule asks for, and recording it.
 
     `RoomSettings` raises for a name the room does not carry, which is right
     in a running house and wrong for tests that run every rule against one
     room: the first rule to reach for a threshold would raise, and the reads
     it was about to make would go unrecorded.
+
+    What was asked for is kept, because answering anything would otherwise
+    make a rule asking for a name no room can be given look correct.
     """
+
+    thresholds_asked: set[str]
+    durations_asked: set[str]
+
+    def __post_init__(self) -> None:
+        """Start with nothing asked for."""
+        super().__post_init__()
+        object.__setattr__(self, "thresholds_asked", set())
+        object.__setattr__(self, "durations_asked", set())
 
     def threshold(self, key: str) -> Threshold:
         """Return the room's threshold, or one crossed by a high reading."""
+        self.thresholds_asked.add(key)
         return self.thresholds.get(key, Threshold.rising(0.0))
 
     def duration(self, key: str) -> timedelta:
         """Return the room's duration, or one any elapsed time has served."""
+        self.durations_asked.add(key)
         return self.durations.get(key, timedelta(0))
 
 
-ANY_SETTINGS: Final = AnySettings(thresholds={}, durations={}, activation_delays={})
+def recording_settings() -> AnySettings:
+    """Build settings that answer anything and remember what was asked."""
+    return AnySettings(thresholds={}, durations={}, activation_delays={})
+
+
+ANY_SETTINGS: Final = recording_settings()
 
 EXTREMES: Final = (None, 5000.0, -5000.0)
 """Numeric levels: as configured, then either side of any crossing point."""
 
+SWEEP: Final = (*EXTREMES, *(step / 2 for step in range(-60, 61)))
+"""Numeric levels in half steps, for comparing two answers to one room.
 
-def every_room(*, dead_member: bool = False) -> list[RecordingObservations]:
+Extremes are enough to reach a branch, and not enough to compare two
+thresholds: the gap between them can be narrower than the jump between one
+extreme and the next, and a rule that is wrong only inside that gap would
+never be run at a reading inside it.
+"""
+
+
+def every_room(
+    *,
+    dead_member: bool = False,
+    missing: Mapping[str, UnusableReason] | None = None,
+    levels: tuple[float | None, ...] = EXTREMES,
+) -> list[RecordingObservations]:
     """Every room a rule must read the same way.
 
     Both settings of each boolean, both a shut room and one with something
@@ -138,21 +178,31 @@ def every_room(*, dead_member: bool = False) -> list[RecordingObservations]:
     With `dead_member`, one member of every group cannot be read while the
     group as a whole still can, which is the state that separates advice to
     shut something from advice to open it.
+
+    With `missing`, named inputs are unreadable for the reason given. An
+    input a room was never given and one whose sensor has died are different
+    states, and a rule is required to tell them apart: the first is a choice
+    and the second is a fault.
     """
+    absent = dict(missing or {})
     rooms = []
     for inverted in (False, True):
         for opened in (False, True):
-            for level in EXTREMES:
+            for level in levels:
                 rooms.append(
                     snapshot(
                         {
-                            key: (not value if inverted else value)
+                            key: absent[key]
+                            if key in absent
+                            else (not value if inverted else value)
                             if isinstance(value, bool)
                             else (value if level is None else level)
                             for key, value in READINGS.items()
                         },
                         {
-                            key: _shaped(key, opened=opened, dead_member=dead_member)
+                            key: group(key, unusable=GROUPS[key])
+                            if key in absent
+                            else _shaped(key, opened=opened, dead_member=dead_member)
                             for key in GROUPS
                         },
                     )
