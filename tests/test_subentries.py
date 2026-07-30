@@ -333,10 +333,15 @@ async def test_renaming_a_room_reaches_its_device(
     assert device.name == "Galley"
 
 
-async def test_a_room_is_a_service_without_a_model(
+async def test_a_room_is_a_service_with_no_subtext_of_its_own(
     hass: HomeAssistant, config_entry: MockConfigEntry
 ) -> None:
-    """A room's device carries no model: its own row already reads "Room"."""
+    """A room's device says nothing the row above it already says.
+
+    Home Assistant prints a device's subtext as the first of model, software
+    version and manufacturer that is set, followed by the area. All three are
+    unset, so the subtext is the area alone.
+    """
     await _setup_hub(hass, config_entry)
     subentry_id = await _add_room(hass, config_entry, name="Office")
 
@@ -344,6 +349,33 @@ async def test_a_room_is_a_service_without_a_model(
     assert device is not None
     assert device.entry_type is dr.DeviceEntryType.SERVICE
     assert device.model is None
+    assert device.sw_version is None
+    assert device.manufacturer is None
+
+
+async def test_a_room_device_drops_a_model_and_maker_it_already_carried(
+    hass: HomeAssistant, config_entry: MockConfigEntry
+) -> None:
+    """A device from an earlier version is cleared on the next setup.
+
+    Leaving a field out of ``async_get_or_create`` keeps whatever an existing
+    device holds, so both are written as None rather than omitted.
+    """
+    await _setup_hub(hass, config_entry)
+    subentry_id = await _add_room(hass, config_entry, name="Office")
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+
+    dr.async_get(hass).async_update_device(
+        device.id, model="Room", manufacturer="Room Advisor"
+    )
+    assert await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    device = _device_for(hass, subentry_id)
+    assert device is not None
+    assert device.model is None
+    assert device.manufacturer is None
 
 
 async def test_add_room_creates_a_device_in_the_area(
