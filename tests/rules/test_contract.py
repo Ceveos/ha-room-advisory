@@ -8,16 +8,24 @@ that it is declared honestly.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import timedelta
 
 import pytest
 from _pytest.mark import ParameterSet
 
-from custom_components.room_advisor.models import Action, Category, ConditionState
+from custom_components.room_advisor.models import (
+    Action,
+    Category,
+    ConditionState,
+    UnusableReason,
+)
 from custom_components.room_advisor.observations import OBSERVATION_KEYS
 from custom_components.room_advisor.rules import RULES
 from custom_components.room_advisor.rules.base import Rule
+from custom_components.room_advisor.settings import THRESHOLD_KEYS
 from tests.rules import snapshots
+from tests.rules.recording import RecordingObservations
 
 NO_STATE = ConditionState(matching=frozenset(), active_since={})
 
@@ -37,6 +45,23 @@ def _every_rule() -> list[ParameterSet]:
     return [pytest.param(rule, id=rule.id) for rule in RULES.all_rules()]
 
 
+def _rooms_reaching_every_branch(rule: Rule) -> Iterator[RecordingObservations]:
+    """Rooms enough to take a rule down each way it can go.
+
+    Beyond the readings and windows `every_room` varies, each input the rule
+    does not require is withheld in turn, once as an input the room was never
+    given and once as one whose sensor has died. A rule that reads something
+    only when an optional input is absent is answering in degraded mode, and
+    that answer would otherwise never be run.
+    """
+    yield from snapshots.every_room()
+    for key in snapshots.READINGS:
+        if key in rule.requires:
+            continue
+        for reason in (UnusableReason.NOT_CONFIGURED, UnusableReason.UNAVAILABLE):
+            yield from snapshots.every_room(missing={key: reason})
+
+
 def test_the_window_rules_are_published_in_this_order() -> None:
     """Precedence is registration order, so the order here is the product.
 
@@ -47,6 +72,9 @@ def test_the_window_rules_are_published_in_this_order() -> None:
     assert [rule.id for rule in RULES.for_category(Category.WINDOW)] == [
         "window.away_secure",
         "window.rain_incoming",
+        "window.outdoor_air_quality",
+        "window.room_too_cold",
+        "window.hvac_conflict",
     ]
 
 
@@ -84,7 +112,7 @@ def test_a_rule_reads_only_the_inputs_it_declared(rule: Rule) -> None:
     Checked over every room in `every_room`, because a read a rule makes only
     once a reading is extreme is the shape of most of the rules there are.
     """
-    for obs in snapshots.every_room():
+    for obs in _rooms_reaching_every_branch(rule):
         rule.evaluate(obs, snapshots.ANY_SETTINGS, NO_STATE)
         assert obs.undeclared_reads(rule) == frozenset()
 
@@ -127,6 +155,69 @@ def test_a_rule_reads_no_other_category_s_inputs(rule: Rule) -> None:
         )
     )
     assert declared & foreign == frozenset()
+
+
+@pytest.mark.parametrize("rule", _every_rule())
+def test_a_rule_asks_only_for_settings_a_room_can_be_given(rule: Rule) -> None:
+    """A threshold a room does not carry raises when the rule is first run.
+
+    Rules reach for settings by name, and `RoomSettings` raises for a name it
+    does not hold. Nothing else compares the names rules ask for against the
+    names configuration supplies, so a mistyped one would take down every
+    evaluation in the house that first crossed it.
+    """
+    asked: set[str] = set()
+    for obs in snapshots.every_room():
+        settings = snapshots.recording_settings()
+        rule.evaluate(obs, settings, NO_STATE)
+        asked |= settings.thresholds_asked
+
+    assert asked <= THRESHOLD_KEYS
+
+
+@pytest.mark.parametrize("rule", _every_rule())
+def test_withholding_an_optional_input_never_creates_advice(rule: Rule) -> None:
+    """A degraded answer is never bolder than the full one.
+
+    A rule that reads an optional input owns the answer it gives without one.
+    That answer may be more cautious, and usually is; what it may never be is
+    advice the same room would not have been given had the input been there.
+    Information going missing is not a reason to act.
+
+    Compared room by room, so the two answers differ in nothing but the one
+    input.
+    """
+    for key in rule.optional:
+        for reason in (UnusableReason.NOT_CONFIGURED, UnusableReason.UNAVAILABLE):
+            for informed, degraded in zip(
+                snapshots.every_room(levels=snapshots.SWEEP),
+                snapshots.every_room(missing={key: reason}, levels=snapshots.SWEEP),
+                strict=True,
+            ):
+                if rule.evaluate(degraded, snapshots.ANY_SETTINGS, NO_STATE) is None:
+                    continue
+                assert (
+                    rule.evaluate(informed, snapshots.ANY_SETTINGS, NO_STATE)
+                    is not None
+                )
+
+
+@pytest.mark.parametrize("rule", _every_rule())
+def test_a_rule_never_advises_opening_while_a_guard_cannot_be_read(
+    rule: Rule,
+) -> None:
+    """A guard that is merely read is a guard that does not guard.
+
+    A configured guard the room cannot read withholds advice to open exactly
+    as a blocking one does: advising a window open into rain the integration
+    could not see is the failure guards exist to prevent. An unconfigured
+    guard is skipped instead, which is the user's own choice and is covered by
+    every other room here.
+    """
+    for key in rule.guards:
+        for obs in snapshots.every_room(missing={key: UnusableReason.UNAVAILABLE}):
+            advisory = rule.evaluate(obs, snapshots.ANY_SETTINGS, NO_STATE)
+            assert advisory is None or advisory.action not in _OPENING
 
 
 @pytest.mark.parametrize("rule", _every_rule())

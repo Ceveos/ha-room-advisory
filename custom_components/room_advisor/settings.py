@@ -29,6 +29,17 @@ _MISORDERED: Final = (
 )
 
 
+INDOOR_COMFORT_FLOOR: Final = "indoor_comfort_floor"
+OUTDOOR_AIR_QUALITY_LIMIT: Final = "outdoor_air_quality_limit"
+
+THRESHOLD_KEYS: Final = frozenset({INDOOR_COMFORT_FLOOR, OUTDOOR_AIR_QUALITY_LIMIT})
+"""Every crossing point a room may carry.
+
+Stated here rather than in the rules that read them, so that resolving a
+room's configuration and reading it back are written against one vocabulary.
+"""
+
+
 class Direction(Enum):
     """Which way a value crosses a threshold to make advice worth giving."""
 
