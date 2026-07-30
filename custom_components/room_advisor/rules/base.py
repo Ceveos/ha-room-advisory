@@ -64,11 +64,15 @@ class Rule(Protocol):
         obs: Observations,
         settings: RoomSettings,
         state: ConditionState,
+        /,
     ) -> Advisory | None:
         """Return advice if this condition holds, otherwise `None`.
 
         Deterministic and free of side effects: the same inputs must always
         give the same answer, because the runner may call it on any tick.
+
+        Taken positionally, so a rule with no thresholds and no latch may name
+        the arguments it does not read `_settings` and `_state`.
         """
         ...
 

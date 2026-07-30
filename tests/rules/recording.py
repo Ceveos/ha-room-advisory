@@ -101,11 +101,17 @@ class RecordingObservations(Observations):
         self.keys_read.add(key)
         return super().group(key)
 
-    def guard_when(self, key: str, blocking: Callable[[Any], bool]) -> GuardState:
+    def guard(self, key: str) -> GuardState:
         """Record and delegate.
 
-        `guard` routes through here, so both are covered by this one override.
+        Overridden separately because a guard on a multi-entity input is
+        answered without reaching `guard_when` or the groups mapping.
         """
+        self.keys_read.add(key)
+        return super().guard(key)
+
+    def guard_when(self, key: str, blocking: Callable[[Any], bool]) -> GuardState:
+        """Record and delegate."""
         self.keys_read.add(key)
         return super().guard_when(key, blocking)
 
