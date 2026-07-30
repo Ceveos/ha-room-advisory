@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime, timedelta
+
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.json import JSONEncoder
 
 from custom_components.room_advisor.models import (
     GroupObservation,
@@ -14,16 +19,27 @@ from custom_components.room_advisor.models import (
 from custom_components.room_advisor.observations import (
     DERIVED_KEYS,
     OBSERVATION_KEYS,
+    VacancyState,
+    build_observations,
     derive_observations,
+    next_wake_up,
 )
 
 _CELSIUS = "°C"
 _FAHRENHEIT = "°F"
+_NOON = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
 
 
 def _reading(key: str, value: float, unit: str | None = _CELSIUS) -> Observation:
     """Build a usable source reading."""
     return Observation.reading(key, value, unit=unit, source_entity_id=f"sensor.{key}")
+
+
+def _occupancy(*, occupied: bool) -> Observation:
+    """Build a usable occupancy reading."""
+    return Observation.reading(
+        "occupancy", occupied, source_entity_id="sensor.occupancy"
+    )
 
 
 def _missing(key: str, reason: UnusableReason) -> Observation:
@@ -38,7 +54,19 @@ def _snapshot(**sources: Observation) -> Observations:
 
 def _derived(margin: float = 0.0, **sources: Observation) -> Observations:
     """Derive from a snapshot holding only the named sources."""
-    return derive_observations(_snapshot(**sources), uncertainty_margin=margin)
+    observations, _ = derive_observations(
+        _snapshot(**sources), VacancyState(), _NOON, uncertainty_margin=margin
+    )
+    return observations
+
+
+def _vacancy(
+    occupancy: Observation | None, state: VacancyState, now: datetime
+) -> tuple[Observation, VacancyState]:
+    """Advance one room's vacancy clock and return the reading and new state."""
+    sources = {} if occupancy is None else {"occupancy": occupancy}
+    observations, updated = derive_observations(Observations(sources), state, now)
+    return observations["unoccupied_for"], updated
 
 
 # Vocabulary
@@ -46,7 +74,11 @@ def _derived(margin: float = 0.0, **sources: Observation) -> Observations:
 
 def test_the_derived_keys_are_what_they_are() -> None:
     """Rules name these keys, and a renamed one silently stops a rule running."""
-    assert sorted(DERIVED_KEYS) == ["outdoor_dew_point", "temperature_advantage"]
+    assert sorted(DERIVED_KEYS) == [
+        "outdoor_dew_point",
+        "temperature_advantage",
+        "unoccupied_for",
+    ]
 
 
 def test_the_observation_keys_are_every_key_a_rule_may_name() -> None:
@@ -69,6 +101,7 @@ def test_the_observation_keys_are_every_key_a_rule_may_name() -> None:
         "outdoor_temperature",
         "rain_risk",
         "temperature_advantage",
+        "unoccupied_for",
         "window_contacts",
     ]
 
@@ -79,7 +112,7 @@ def test_every_derived_key_is_present_even_with_no_sources_at_all() -> None:
     A source the snapshot never carried reads as unconfigured, so a derivation
     always produces an observation rather than depending on what it was given.
     """
-    observations = derive_observations(Observations())
+    observations, _ = derive_observations(Observations(), VacancyState(), _NOON)
 
     assert set(observations) >= DERIVED_KEYS
     assert all(
@@ -93,15 +126,72 @@ def test_every_derived_key_is_present_even_with_no_sources_at_all() -> None:
 
 def test_deriving_keeps_the_readings_it_was_given() -> None:
     """The snapshot is added to, not replaced."""
-    observations = derive_observations(
+    observations, _ = derive_observations(
         Observations(
             {"indoor_temperature": _reading("indoor_temperature", 21.0)},
             {"lights": GroupObservation("lights", ("light.a",), ("light.a",), (), ())},
-        )
+        ),
+        VacancyState(),
+        _NOON,
     )
 
     assert observations.value("indoor_temperature") == 21.0
     assert observations.groups["lights"].any_known_on
+
+
+def test_a_real_snapshot_can_be_guarded_on_every_key_it_advertises(
+    hass: HomeAssistant,
+) -> None:
+    """The runner validates a rule's guards against `OBSERVATION_KEYS` alone.
+
+    Built keys and derived keys are each proven guardable on their own; this
+    is the one place the two halves meet, which is where a key can be
+    advertised by one and produced by neither.
+    """
+    observations, _ = derive_observations(
+        build_observations(hass, {}, {}), VacancyState(), _NOON
+    )
+
+    assert all(
+        observations.guard(key) is GuardState.NOT_CONFIGURED for key in OBSERVATION_KEYS
+    )
+
+
+def test_every_observation_is_filed_under_the_key_it_names(hass: HomeAssistant) -> None:
+    """An observation labelled with another key renders the wrong reason.
+
+    The publisher reports unusable inputs from the observation itself, so a
+    mislabelled one names an input the room never had trouble with. Checked
+    over a room whose readings are live, not only one that has nothing.
+    """
+    hass.states.async_set("binary_sensor.motion", "off")
+    hass.states.async_set("sensor.inside", "26", {"unit_of_measurement": "°C"})
+    hass.states.async_set("sensor.outside", "20", {"unit_of_measurement": "°C"})
+    hass.states.async_set("sensor.rh", "50", {"unit_of_measurement": "%"})
+    hass.states.async_set("light.desk", "on")
+
+    observations, _ = derive_observations(
+        build_observations(
+            hass,
+            {
+                "outdoor_temperature": "sensor.outside",
+                "outdoor_humidity": "sensor.rh",
+            },
+            {
+                "occupancy": "binary_sensor.motion",
+                "indoor_temperature": "sensor.inside",
+                "lights": ["light.desk"],
+            },
+        ),
+        VacancyState(),
+        _NOON,
+    )
+
+    assert observations.usable(
+        "unoccupied_for", "outdoor_dew_point", "temperature_advantage", "lights"
+    )
+    assert all(observations[key].key == key for key in observations)
+    assert all(group.key == key for key, group in observations.groups.items())
 
 
 # Dew point
@@ -404,3 +494,177 @@ def test_a_derivation_never_carries_a_value_it_could_not_compute() -> None:
 
     assert observations["temperature_advantage"].value is None
     assert not observations["temperature_advantage"].usable
+
+
+# The vacancy clock
+
+
+def test_an_occupied_room_has_been_empty_for_no_time_at_all() -> None:
+    """Zero rather than unusable, so a rule compares it without a special case."""
+    reading, state = _vacancy(_occupancy(occupied=True), VacancyState(), _NOON)
+
+    assert reading.value == 0.0
+    assert reading.unit == "s"
+    assert state.unoccupied_since is None
+
+
+def test_a_room_that_has_just_emptied_starts_counting_from_now() -> None:
+    """The first evaluation after occupancy clears sets the mark."""
+    reading, state = _vacancy(_occupancy(occupied=False), VacancyState(), _NOON)
+
+    assert reading.value == 0.0
+    assert state.unoccupied_since == _NOON
+
+
+def test_a_room_still_empty_reports_the_time_since_it_emptied() -> None:
+    """The mark is kept, so the count survives evaluations that change nothing."""
+    reading, state = _vacancy(
+        _occupancy(occupied=False),
+        VacancyState(_NOON),
+        _NOON + timedelta(minutes=15),
+    )
+
+    assert reading.value == pytest.approx(900.0)
+    assert reading.source_entity_id == "sensor.occupancy"
+    assert state.unoccupied_since == _NOON
+
+
+def test_occupancy_returning_clears_the_count() -> None:
+    """Somebody walking in ends the vacancy, however long it had run."""
+    reading, state = _vacancy(
+        _occupancy(occupied=True),
+        VacancyState(_NOON),
+        _NOON + timedelta(hours=3),
+    )
+
+    assert reading.value == 0.0
+    assert state.unoccupied_since is None
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        UnusableReason.NOT_CONFIGURED,
+        UnusableReason.UNAVAILABLE,
+        UnusableReason.UNKNOWN,
+        UnusableReason.NOT_YET_SEEN,
+    ],
+    ids=["unconfigured", "unavailable", "unknown", "not yet seen"],
+)
+def test_an_unreadable_occupancy_stops_the_clock(reason: UnusableReason) -> None:
+    """A count nobody can vouch for is worse than no count."""
+    reading, state = _vacancy(
+        _missing("occupancy", reason), VacancyState(_NOON), _NOON + timedelta(hours=1)
+    )
+
+    assert reading.unusable_reason is reason
+    assert reading.unit == "s"
+    assert reading.source_entity_id == "sensor.occupancy"
+    assert state.unoccupied_since is None
+
+
+def test_the_count_restarts_after_occupancy_comes_back() -> None:
+    """Nothing rules out the room having been entered while it could not be seen.
+
+    Resuming the old count would advise on a room that may have been busy the
+    whole time, which is the one direction this must never err in.
+    """
+    _, blind = _vacancy(
+        _missing("occupancy", UnusableReason.UNAVAILABLE),
+        VacancyState(_NOON),
+        _NOON + timedelta(hours=1),
+    )
+    reading, state = _vacancy(
+        _occupancy(occupied=False), blind, _NOON + timedelta(hours=2)
+    )
+
+    assert reading.value == 0.0
+    assert state.unoccupied_since == _NOON + timedelta(hours=2)
+
+
+def test_a_clock_that_has_gone_backwards_starts_again() -> None:
+    """A count is never negative, whatever the host's clock has just done."""
+    reading, state = _vacancy(
+        _occupancy(occupied=False),
+        VacancyState(_NOON),
+        _NOON - timedelta(hours=1),
+    )
+
+    assert reading.value == 0.0
+    assert state.unoccupied_since == _NOON - timedelta(hours=1)
+
+
+def test_a_room_with_no_occupancy_sensor_is_unconfigured_not_empty() -> None:
+    """Zero would read as a room that has only this moment emptied."""
+    reading, state = _vacancy(None, VacancyState(), _NOON)
+
+    assert reading.unusable_reason is UnusableReason.NOT_CONFIGURED
+    assert state.unoccupied_since is None
+
+
+# Waking up
+
+
+def test_nothing_is_waited_for_while_a_room_is_occupied() -> None:
+    """A count that is not running has no boundary to cross."""
+    assert next_wake_up(VacancyState(), [timedelta(minutes=15)], _NOON) is None
+
+
+def test_the_next_wake_up_is_the_earliest_boundary_still_ahead() -> None:
+    """No state change occurs at minute fifteen, so it has to be waited for."""
+    boundary = next_wake_up(
+        VacancyState(_NOON),
+        [timedelta(minutes=30), timedelta(minutes=15), timedelta(minutes=45)],
+        _NOON + timedelta(minutes=1),
+    )
+
+    assert boundary == _NOON + timedelta(minutes=15)
+
+
+def test_a_boundary_already_crossed_is_not_waited_for_again() -> None:
+    """Otherwise the room wakes forever at a moment that has already passed."""
+    boundary = next_wake_up(
+        VacancyState(_NOON),
+        [timedelta(minutes=15), timedelta(minutes=45)],
+        _NOON + timedelta(minutes=20),
+    )
+
+    assert boundary == _NOON + timedelta(minutes=45)
+
+
+def test_a_boundary_falling_exactly_now_is_behind_us() -> None:
+    """Scheduling it would wake at this instant and find the same thing again."""
+    boundary = next_wake_up(
+        VacancyState(_NOON), [timedelta(minutes=15)], _NOON + timedelta(minutes=15)
+    )
+
+    assert boundary is None
+
+
+def test_a_room_past_its_last_boundary_waits_for_nothing() -> None:
+    """The count keeps running; nobody needs telling about it again."""
+    assert (
+        next_wake_up(
+            VacancyState(_NOON), [timedelta(minutes=15)], _NOON + timedelta(hours=9)
+        )
+        is None
+    )
+
+
+def test_a_room_configuring_no_durations_waits_for_nothing() -> None:
+    """The number of timers is bounded by what the room actually asked for."""
+    assert next_wake_up(VacancyState(_NOON), [], _NOON) is None
+
+
+def test_the_vacancy_reading_survives_being_written_to_an_attribute() -> None:
+    """Observations are published as state attributes, which must be JSON.
+
+    A `timedelta` is not, and would fail only once the publisher exists.
+    """
+    reading, _ = _vacancy(
+        _occupancy(occupied=False),
+        VacancyState(_NOON),
+        _NOON + timedelta(minutes=15),
+    )
+
+    assert json.dumps({"unoccupied_for": reading.value}, cls=JSONEncoder)
