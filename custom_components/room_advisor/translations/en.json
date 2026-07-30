@@ -3,11 +3,47 @@
     "step": {
       "user": {
         "title": "Room Advisor",
-        "description": "Room Advisor tells you what is worth doing in each room, and why, as entities your automations can use.\n\nThis hub holds the inputs and default settings that every room inherits, so you only set them once. Everything here is optional, and any room can override what it inherits.\n\nAdd your rooms next."
+        "description": "Room Advisor tells you what is worth doing in each room, and why, as entities your automations can use.\n\nThese are the inputs every room shares, so you only set them once. All optional — a missing one only switches off the advice that needs it. You can change them later from this hub's settings.\n\nAdd your rooms next.",
+        "data": {
+          "outdoor_temperature": "Outdoor temperature",
+          "outdoor_humidity": "Outdoor humidity",
+          "outdoor_air_quality": "Outdoor air quality",
+          "rain_risk": "Rain expected",
+          "away": "Away"
+        },
+        "data_description": {
+          "outdoor_temperature": "A thermometer or a weather entity. Used to decide whether opening a window would help.",
+          "outdoor_humidity": "A hygrometer or a weather entity. Stops a window being suggested when the outside air is muggy.",
+          "outdoor_air_quality": "An AQI or particulate sensor. Stops a window being suggested when the outside air is poor.",
+          "rain_risk": "Something that turns on when rain worth closing a window for is expected. Forecasts are not read.",
+          "away": "An alarm panel, or the people whose absence means the house is empty. Away when every one of them is."
+        }
       }
     },
     "abort": {
       "single_instance_allowed": "Already configured. There is one Room Advisor hub per house; add each room to the existing hub."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Shared inputs",
+        "description": "The inputs every room shares. All optional — a missing one only switches off the advice that needs it.",
+        "data": {
+          "outdoor_temperature": "Outdoor temperature",
+          "outdoor_humidity": "Outdoor humidity",
+          "outdoor_air_quality": "Outdoor air quality",
+          "rain_risk": "Rain expected",
+          "away": "Away"
+        },
+        "data_description": {
+          "outdoor_temperature": "A thermometer or a weather entity. Used to decide whether opening a window would help.",
+          "outdoor_humidity": "A hygrometer or a weather entity. Stops a window being suggested when the outside air is muggy.",
+          "outdoor_air_quality": "An AQI or particulate sensor. Stops a window being suggested when the outside air is poor.",
+          "rain_risk": "Something that turns on when rain worth closing a window for is expected. Forecasts are not read.",
+          "away": "An alarm panel, or the people whose absence means the house is empty. Away when every one of them is."
+        }
+      }
     }
   },
   "config_subentries": {

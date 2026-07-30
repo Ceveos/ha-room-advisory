@@ -17,6 +17,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     ConfigSubentry,
     ConfigSubentryFlow,
+    OptionsFlow,
     SubentryFlowResult,
 )
 from homeassistant.const import CONF_NAME
@@ -28,8 +29,10 @@ from homeassistant.helpers.selector import AreaSelector, TextSelector
 from .const import CONF_AREA_ID, DOMAIN, NAME, SUBENTRY_TYPE_ROOM
 from .inputs import (
     CONF_INPUTS,
-    clean_room_inputs,
-    room_inputs_schema,
+    ROOM_INPUTS,
+    SHARED_INPUTS,
+    clean_inputs,
+    inputs_schema,
     suggest_room_inputs,
 )
 
@@ -65,18 +68,62 @@ class RoomAdvisorConfigFlow(ConfigFlow, domain=DOMAIN):
         """
         return {SUBENTRY_TYPE_ROOM: RoomSubentryFlow}
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: ConfigEntry,  # noqa: ARG004
+    ) -> OptionsFlow:
+        """Return the flow that edits the shared inputs.
+
+        ``config_entry`` is unused: there is one hub and the flow reaches it
+        itself.
+        """
+        return RoomAdvisorOptionsFlow()
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Create the hub entry.
+        """Create the hub entry and collect the shared inputs.
 
-        The hub's shared inputs and thresholds are all optional, so there is
-        nothing to ask for yet.
+        Everything asked here is optional, and can be changed afterwards
+        through the hub's own settings.
         """
         if user_input is None:
-            return self.async_show_form(step_id="user", data_schema=vol.Schema({}))
+            return self.async_show_form(
+                step_id="user", data_schema=inputs_schema(SHARED_INPUTS)
+            )
 
-        return self.async_create_entry(title=NAME, data={})
+        return self.async_create_entry(
+            title=NAME,
+            data={},
+            options={CONF_INPUTS: clean_inputs(user_input, SHARED_INPUTS)},
+        )
+
+
+class RoomAdvisorOptionsFlow(OptionsFlow):
+    """Edit the inputs every room shares.
+
+    They are asked during setup, so this is where they are changed rather than
+    where they are first met. Writing options reloads the hub, which is how a
+    change reaches the rooms.
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show the shared inputs as they stand, and store what comes back."""
+        if user_input is None:
+            return self.async_show_form(
+                step_id="init",
+                data_schema=self.add_suggested_values_to_schema(
+                    inputs_schema(SHARED_INPUTS),
+                    dict(self.config_entry.options.get(CONF_INPUTS, {})),
+                ),
+            )
+
+        return self.async_create_entry(
+            data={CONF_INPUTS: clean_inputs(user_input, SHARED_INPUTS)}
+        )
 
 
 class RoomSubentryFlow(ConfigSubentryFlow):
@@ -137,11 +184,14 @@ class RoomSubentryFlow(ConfigSubentryFlow):
             return self.async_show_form(
                 step_id="inputs",
                 data_schema=self.add_suggested_values_to_schema(
-                    room_inputs_schema(), self._suggested_inputs()
+                    inputs_schema(ROOM_INPUTS), self._suggested_inputs()
                 ),
             )
 
-        room = {CONF_AREA_ID: self._area_id, CONF_INPUTS: clean_room_inputs(user_input)}
+        room = {
+            CONF_AREA_ID: self._area_id,
+            CONF_INPUTS: clean_inputs(user_input, ROOM_INPUTS),
+        }
         if self.source != SOURCE_RECONFIGURE:
             return self.async_create_entry(title=self._name, data=room)
 

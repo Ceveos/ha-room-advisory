@@ -1,4 +1,4 @@
-"""Tests for the room input vocabulary.
+"""Tests for the input vocabulary.
 
 The keys here are stored in configuration and read by the observation layer.
 """
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 import voluptuous as vol
@@ -19,28 +20,43 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.room_advisor import inputs as inputs_module
 from custom_components.room_advisor.inputs import (
+    INPUTS,
     ROOM_INPUTS,
+    SHARED_INPUTS,
+    InputKey,
+    InputScope,
     InputSpec,
-    RoomInput,
-    clean_room_inputs,
+    clean_inputs,
     entity_ids,
-    room_inputs_schema,
+    inputs_schema,
     suggest_room_inputs,
 )
 
 
 def test_every_input_is_offered_exactly_once() -> None:
     """A key with no field could never be set, and a duplicate would shadow."""
-    assert [spec.key for spec in ROOM_INPUTS] == list(RoomInput)
+    assert [spec.key for spec in INPUTS] == list(InputKey)
 
 
-def test_the_stored_keys_are_what_they_are() -> None:
-    """These strings are in people's configuration. Changing one is a migration.
+def test_every_input_belongs_to_exactly_one_form() -> None:
+    """The two forms partition the vocabulary; neither drops nor repeats a key."""
+    assert (*SHARED_INPUTS, *ROOM_INPUTS) == INPUTS
 
-    Stated literally rather than derived from the enum, so that renaming a
-    member fails here instead of silently orphaning stored entities.
+
+def test_which_form_offers_which_input() -> None:
+    """Scope decides where an input is asked and where it is stored.
+
+    Stated literally: moving a key between the house and a room moves where it
+    is written, which is a migration and not a rearrangement.
     """
-    assert {input_key.value for input_key in RoomInput} == {
+    assert {spec.key.value for spec in INPUTS if spec.scope is InputScope.SHARED} == {
+        "outdoor_temperature",
+        "outdoor_humidity",
+        "outdoor_air_quality",
+        "rain_risk",
+        "away",
+    }
+    assert {spec.key.value for spec in INPUTS if spec.scope is InputScope.ROOM} == {
         "indoor_temperature",
         "indoor_co2",
         "occupancy",
@@ -51,19 +67,74 @@ def test_the_stored_keys_are_what_they_are() -> None:
     }
 
 
-def test_the_form_offers_exactly_the_translated_fields() -> None:
+def test_the_stored_keys_are_what_they_are() -> None:
+    """These strings are in people's configuration. Changing one is a migration.
+
+    Stated literally rather than derived from the enum, so that renaming a
+    member fails here instead of silently orphaning stored entities.
+    """
+    assert {input_key.value for input_key in InputKey} == {
+        "outdoor_temperature",
+        "outdoor_humidity",
+        "outdoor_air_quality",
+        "rain_risk",
+        "away",
+        "indoor_temperature",
+        "indoor_co2",
+        "occupancy",
+        "window_contacts",
+        "lights",
+        "fan",
+        "hvac",
+    }
+
+
+def _strings() -> dict[str, Any]:
+    """Read the integration's own translation source."""
+    return json.loads(  # type: ignore[no-any-return]
+        (Path(inputs_module.__file__).parent / "strings.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
+def test_the_shipped_translation_matches_its_source() -> None:
+    """Home Assistant reads `translations/en.json`, never `strings.json`.
+
+    Every check below is made against the source file, so a field added to one
+    and not the other renders as a raw key at runtime and nowhere else.
+    """
+    shipped = json.loads(
+        (Path(inputs_module.__file__).parent / "translations" / "en.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert shipped == _strings()
+
+
+@pytest.mark.parametrize(
+    ("path", "specs"),
+    [
+        pytest.param(("config", "step", "user"), SHARED_INPUTS, id="hub setup"),
+        pytest.param(("options", "step", "init"), SHARED_INPUTS, id="hub settings"),
+        pytest.param(
+            ("config_subentries", "room", "step", "inputs"), ROOM_INPUTS, id="room"
+        ),
+    ],
+)
+def test_each_form_offers_exactly_the_translated_fields(
+    path: tuple[str, ...], specs: tuple[InputSpec, ...]
+) -> None:
     """A field with no translation renders as a raw key.
 
     `strings.json` names the fields by hand, so it can drift from the inputs it
     describes without anything else noticing.
     """
-    strings = json.loads(
-        (Path(inputs_module.__file__).parent / "strings.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    step = strings["config_subentries"]["room"]["step"]["inputs"]
-    expected = [spec.key.value for spec in ROOM_INPUTS]
+    step: Any = _strings()
+    for segment in path:
+        step = step[segment]
+    expected = [spec.key.value for spec in specs]
 
     assert list(step["data"]) == expected
     assert list(step["data_description"]) == expected
@@ -72,10 +143,12 @@ def test_the_form_offers_exactly_the_translated_fields() -> None:
 def test_cleaned_inputs_are_json_native() -> None:
     """Subentry data is stored as JSON, so an enum member must not reach it.
 
-    `RoomInput` is a `StrEnum` and compares equal to its own value, so an
+    `InputKey` is a `StrEnum` and compares equal to its own value, so an
     equality assertion cannot catch this.
     """
-    cleaned = clean_room_inputs({RoomInput.FAN: "fan.a", RoomInput.LIGHTS: ["light.a"]})
+    cleaned = clean_inputs(
+        {InputKey.FAN: "fan.a", InputKey.LIGHTS: ["light.a"]}, ROOM_INPUTS
+    )
 
     assert all(type(key) is str for key in cleaned)
     assert json.loads(json.dumps(cleaned)) == cleaned
@@ -105,16 +178,16 @@ def _shape(
     )
 
 
-def _spec(key: RoomInput) -> InputSpec:
+def _spec(key: InputKey) -> InputSpec:
     """Return the spec for one input."""
-    return next(spec for spec in ROOM_INPUTS if spec.key is key)
+    return next(spec for spec in INPUTS if spec.key is key)
 
 
 def test_every_filter_names_a_domain() -> None:
     """Suggestion matching reads the domain of every filter."""
     assert all(
         "domain" in entity_filter
-        for spec in ROOM_INPUTS
+        for spec in INPUTS
         for entity_filter in (*spec.accepts, *spec.suggested)
     )
 
@@ -126,7 +199,26 @@ def test_what_each_input_accepts_is_what_it_accepts() -> None:
     to read, and the empty device-class tuples are what lets a contact sensor
     that names no device class be chosen at all.
     """
-    assert {spec.key.value: _shape(spec.accepts) for spec in ROOM_INPUTS} == {
+    assert {spec.key.value: _shape(spec.accepts) for spec in INPUTS} == {
+        "outdoor_temperature": [
+            (("sensor",), ("temperature",)),
+            (("weather",), ()),
+        ],
+        "outdoor_humidity": [(("sensor",), ("humidity",)), (("weather",), ())],
+        "outdoor_air_quality": [(("sensor",), ())],
+        "rain_risk": [(("binary_sensor", "input_boolean", "switch"), ())],
+        "away": [
+            (
+                (
+                    "alarm_control_panel",
+                    "binary_sensor",
+                    "device_tracker",
+                    "input_boolean",
+                    "person",
+                ),
+                (),
+            )
+        ],
         "indoor_temperature": [(("sensor",), ("temperature",))],
         "indoor_co2": [(("sensor",), ("carbon_dioxide",))],
         "occupancy": [(("binary_sensor", "input_boolean", "person"), ())],
@@ -137,11 +229,21 @@ def test_what_each_input_accepts_is_what_it_accepts() -> None:
     }
 
 
+def test_which_inputs_hold_several_entities() -> None:
+    """Arity is stored shape: a list where a string is expected is a migration."""
+    assert {spec.key.value for spec in INPUTS if spec.multiple} == {
+        "away",
+        "window_contacts",
+        "lights",
+    }
+
+
 def test_what_each_input_proposes_is_what_it_proposes() -> None:
     """Proposing is narrower than accepting, and stays narrow.
 
     A proposal is only worth making when the entity's device class says which
-    input it belongs to.
+    input it belongs to. Only rooms are proposed for: the shared inputs are not
+    drawn from an area.
     """
     assert {spec.key.value: _shape(spec.suggested) for spec in ROOM_INPUTS} == {
         "indoor_temperature": [(("sensor",), ("temperature",))],
@@ -156,7 +258,7 @@ def test_what_each_input_proposes_is_what_it_proposes() -> None:
 
 def test_an_input_never_proposes_what_it_would_reject() -> None:
     """A proposal the picker refuses could not be submitted."""
-    for spec in ROOM_INPUTS:
+    for spec in INPUTS:
         accepted = {
             domain
             for entity_filter in spec.accepts
@@ -176,7 +278,7 @@ def test_a_contact_with_no_device_class_is_accepted() -> None:
     They are accepted by the picker and left out of the proposals, because
     nothing about them says which input they belong to.
     """
-    contacts = _spec(RoomInput.WINDOW_CONTACTS)
+    contacts = _spec(InputKey.WINDOW_CONTACTS)
 
     assert all(
         "device_class" not in entity_filter for entity_filter in contacts.accepts
@@ -187,7 +289,7 @@ def test_a_contact_with_no_device_class_is_accepted() -> None:
 
 def test_a_plain_switch_is_accepted_as_a_light_but_never_proposed() -> None:
     """A light on a switch is common; a switch that is not a light is commoner."""
-    lights = _spec(RoomInput.LIGHTS)
+    lights = _spec(InputKey.LIGHTS)
 
     assert "switch" in {
         domain
@@ -198,12 +300,34 @@ def test_a_plain_switch_is_accepted_as_a_light_but_never_proposed() -> None:
     assert lights.matches("light", None)
 
 
-def test_every_field_is_optional() -> None:
+@pytest.mark.parametrize(
+    "specs",
+    [
+        pytest.param(SHARED_INPUTS, id="shared"),
+        pytest.param(ROOM_INPUTS, id="room"),
+    ],
+)
+def test_every_field_is_optional(specs: tuple[InputSpec, ...]) -> None:
     """Every input is optional, so no field may block the form."""
-    assert room_inputs_schema()({}) == {}
+    assert inputs_schema(specs)({}) == {}
     assert all(
-        isinstance(marker, vol.Optional) for marker in room_inputs_schema().schema
+        isinstance(marker, vol.Optional) for marker in inputs_schema(specs).schema
     )
+
+
+def test_a_form_stores_only_what_it_asked_for() -> None:
+    """Both forms write under the same key, so neither may claim the other's.
+
+    A room and the hub store their entities in different places under the same
+    `inputs` key. Cleaning against the wrong set would let a shared entity land
+    in a room, where nothing reads it.
+    """
+    submitted = {"outdoor_temperature": "sensor.outside", "indoor_co2": "sensor.co2"}
+
+    assert clean_inputs(submitted, SHARED_INPUTS) == {
+        "outdoor_temperature": "sensor.outside"
+    }
+    assert clean_inputs(submitted, ROOM_INPUTS) == {"indoor_co2": "sensor.co2"}
 
 
 @pytest.mark.parametrize(
@@ -211,23 +335,23 @@ def test_every_field_is_optional() -> None:
     [
         pytest.param({}, {}, id="nothing submitted"),
         pytest.param(
-            {RoomInput.INDOOR_TEMPERATURE: "sensor.a"},
-            {RoomInput.INDOOR_TEMPERATURE: "sensor.a"},
+            {InputKey.INDOOR_TEMPERATURE: "sensor.a"},
+            {InputKey.INDOOR_TEMPERATURE: "sensor.a"},
             id="single entity kept",
         ),
         pytest.param(
-            {RoomInput.INDOOR_TEMPERATURE: ""},
+            {InputKey.INDOOR_TEMPERATURE: ""},
             {},
             id="cleared single field dropped",
         ),
         pytest.param(
-            {RoomInput.LIGHTS: []},
+            {InputKey.LIGHTS: []},
             {},
             id="cleared multi field dropped",
         ),
         pytest.param(
-            {RoomInput.LIGHTS: ["light.a", "light.b", "light.a"]},
-            {RoomInput.LIGHTS: ["light.a", "light.b"]},
+            {InputKey.LIGHTS: ["light.a", "light.b", "light.a"]},
+            {InputKey.LIGHTS: ["light.a", "light.b"]},
             id="repeats dropped, order kept",
         ),
         pytest.param(
@@ -241,26 +365,26 @@ def test_clean_room_inputs(
     submitted: dict[str, object], expected: dict[str, object]
 ) -> None:
     """Cleared fields are dropped, so "not configured" has one representation."""
-    assert clean_room_inputs(submitted) == expected
+    assert clean_inputs(submitted, ROOM_INPUTS) == expected
 
 
 @pytest.mark.parametrize(
     ("stored", "key", "expected"),
     [
-        pytest.param({}, RoomInput.LIGHTS, [], id="absent"),
+        pytest.param({}, InputKey.LIGHTS, [], id="absent"),
         pytest.param(
-            {RoomInput.FAN: "fan.a"}, RoomInput.FAN, ["fan.a"], id="single as list"
+            {InputKey.FAN: "fan.a"}, InputKey.FAN, ["fan.a"], id="single as list"
         ),
         pytest.param(
-            {RoomInput.LIGHTS: ["light.a", "light.b"]},
-            RoomInput.LIGHTS,
+            {InputKey.LIGHTS: ["light.a", "light.b"]},
+            InputKey.LIGHTS,
             ["light.a", "light.b"],
             id="already a list",
         ),
     ],
 )
 def test_entity_ids_reads_any_input_as_a_list(
-    stored: dict[str, object], key: RoomInput, expected: list[str]
+    stored: dict[str, object], key: InputKey, expected: list[str]
 ) -> None:
     """Callers that only want entities do not need to know a key's arity."""
     assert entity_ids(stored, key) == expected
@@ -304,8 +428,8 @@ async def test_suggestions_match_domain_and_device_class(
     _register(hass, "light.desk", area_id=area.id)
 
     assert suggest_room_inputs(hass, area.id) == {
-        RoomInput.INDOOR_TEMPERATURE: "sensor.temperature",
-        RoomInput.LIGHTS: ["light.desk"],
+        InputKey.INDOOR_TEMPERATURE: "sensor.temperature",
+        InputKey.LIGHTS: ["light.desk"],
     }
 
 
@@ -321,7 +445,7 @@ async def test_an_ambiguous_single_input_is_not_guessed(hass: HomeAssistant) -> 
     _register(hass, "binary_sensor.right", device_class="window", area_id=area.id)
 
     assert suggest_room_inputs(hass, area.id) == {
-        RoomInput.WINDOW_CONTACTS: ["binary_sensor.left", "binary_sensor.right"]
+        InputKey.WINDOW_CONTACTS: ["binary_sensor.left", "binary_sensor.right"]
     }
 
 
@@ -338,7 +462,7 @@ async def test_entities_are_found_through_their_device(
     dr.async_get(hass).async_update_device(device.id, area_id=area.id)
     _register(hass, "climate.office", device_id=device.id)
 
-    assert suggest_room_inputs(hass, area.id) == {RoomInput.HVAC: "climate.office"}
+    assert suggest_room_inputs(hass, area.id) == {InputKey.HVAC: "climate.office"}
 
 
 async def test_an_entity_moved_out_of_the_area_is_not_dragged_back(
@@ -357,7 +481,7 @@ async def test_an_entity_moved_out_of_the_area_is_not_dragged_back(
     _register(hass, "climate.office", device_id=device.id, area_id=hall.id)
 
     assert suggest_room_inputs(hass, office.id) == {}
-    assert suggest_room_inputs(hass, hall.id) == {RoomInput.HVAC: "climate.office"}
+    assert suggest_room_inputs(hass, hall.id) == {InputKey.HVAC: "climate.office"}
 
 
 async def test_a_disabled_entity_is_not_suggested(hass: HomeAssistant) -> None:
