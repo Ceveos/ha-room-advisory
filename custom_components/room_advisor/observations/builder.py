@@ -24,6 +24,7 @@ from homeassistant.const import (
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
+    UnitOfTemperature,
 )
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.unit_conversion import TemperatureConverter
@@ -49,6 +50,7 @@ _ATTR_WEATHER_HUMIDITY: Final = "humidity"
 _ATTR_HVAC_ACTION: Final = "hvac_action"
 
 _PERCENT: Final = "%"
+_ABSOLUTE_ZERO_C: Final = -273.15
 
 _HVAC_ACTIONS: Final = frozenset(
     {
@@ -155,10 +157,18 @@ def _read_temperature(state: State) -> tuple[float, str | None]:
 
 
 def _read_humidity(state: State) -> tuple[float, str | None]:
-    """Read a hygrometer, or a weather entity's humidity."""
+    """Read a hygrometer, or a weather entity's humidity.
+
+    A hygrometer that does not report percent is refused rather than read on
+    its own scale: a reading of 0.63 is inside every bound a percentage has,
+    and taken for one it makes muggy air look bone dry.
+    """
     if state.domain == _WEATHER_DOMAIN:
         return _as_number(_attribute(state, _ATTR_WEATHER_HUMIDITY)), _PERCENT
-    return _read_number(state)
+    value, unit = _read_number(state)
+    if unit != _PERCENT:
+        raise _UnreadableError(UnusableReason.UNCONVERTIBLE)
+    return value, unit
 
 
 def _read_number(state: State) -> tuple[float, str | None]:
@@ -270,8 +280,8 @@ The observation key is the input key, except for the climate entity: the input
 is a thermostat, the observation is whether it is conditioning the room.
 """
 
-OBSERVATION_KEYS: Final = frozenset(reading.key for reading in _READINGS.values())
-"""Every key a room's snapshot carries, configured or not."""
+BUILT_KEYS: Final = frozenset(reading.key for reading in _READINGS.values())
+"""Every key read from an entity, configured or not."""
 
 
 def build_observations(
@@ -403,14 +413,18 @@ def _in_system_temperature(
 
     A source that names no unit is refused rather than assumed to be in the
     system's own: a Fahrenheit reading taken for Celsius is wrong by enough to
-    advise opening a window in a blizzard.
+    advise opening a window in a blizzard. A reading at or below absolute zero
+    is refused for the same reason — it is a sentinel, not a temperature.
     """
     target: str = hass.config.units.temperature_unit
     if unit is None:
         raise _UnreadableError(UnusableReason.UNCONVERTIBLE)
-    if unit == target:
-        return value, target
     try:
-        return TemperatureConverter.convert(value, unit, target), target
+        converted = TemperatureConverter.convert(value, unit, target)
     except HomeAssistantError as error:
         raise _UnreadableError(UnusableReason.UNCONVERTIBLE) from error
+    if converted <= TemperatureConverter.convert(
+        _ABSOLUTE_ZERO_C, UnitOfTemperature.CELSIUS, target
+    ):
+        raise _UnreadableError(UnusableReason.UNCONVERTIBLE)
+    return converted, target

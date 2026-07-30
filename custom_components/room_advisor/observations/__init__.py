@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
-from .builder import OBSERVATION_KEYS, build_observations
+from typing import Final
 
-__all__ = ["OBSERVATION_KEYS", "build_observations"]
+from .builder import BUILT_KEYS, build_observations
+from .derived import DERIVED_KEYS, derive_observations
+
+OBSERVATION_KEYS: Final = BUILT_KEYS | DERIVED_KEYS
+"""Every key a rule may name, once a snapshot has been derived."""
+
+__all__ = [
+    "BUILT_KEYS",
+    "DERIVED_KEYS",
+    "OBSERVATION_KEYS",
+    "build_observations",
+    "derive_observations",
+]

@@ -14,7 +14,7 @@ from custom_components.room_advisor.models import (
     UnusableReason,
 )
 from custom_components.room_advisor.observations import (
-    OBSERVATION_KEYS,
+    BUILT_KEYS,
     build_observations,
 )
 
@@ -47,7 +47,7 @@ def test_every_key_is_built_for_a_room_that_has_nothing(hass: HomeAssistant) -> 
     """
     observations = _build(hass)
 
-    assert set(observations) | set(observations.groups) == OBSERVATION_KEYS
+    assert set(observations) | set(observations.groups) == BUILT_KEYS
     assert all(
         observations[key].unusable_reason is UnusableReason.NOT_CONFIGURED
         for key in observations
@@ -55,8 +55,8 @@ def test_every_key_is_built_for_a_room_that_has_nothing(hass: HomeAssistant) -> 
     assert not any(observations.groups[key].usable for key in observations.groups)
 
 
-def test_every_key_can_be_read_as_a_guard(hass: HomeAssistant) -> None:
-    """The runner validates a rule's guards against this set and nothing more.
+def test_every_built_key_can_be_read_as_a_guard(hass: HomeAssistant) -> None:
+    """The runner validates a rule's guards against the vocabulary and nothing more.
 
     A key in the vocabulary that raises when guarded on passes validation and
     then fails in every room, so membership has to imply guardability.
@@ -64,17 +64,17 @@ def test_every_key_can_be_read_as_a_guard(hass: HomeAssistant) -> None:
     observations = _build(hass)
 
     assert all(
-        observations.guard(key) is GuardState.NOT_CONFIGURED for key in OBSERVATION_KEYS
+        observations.guard(key) is GuardState.NOT_CONFIGURED for key in BUILT_KEYS
     )
 
 
-def test_the_observation_keys_are_what_they_are() -> None:
+def test_the_built_keys_are_what_they_are() -> None:
     """Rules name these keys, and the runner checks its vocabulary against them.
 
     Stated literally: a renamed key does not fail, it quietly stops a rule
     from ever running.
     """
-    assert sorted(OBSERVATION_KEYS) == [
+    assert sorted(BUILT_KEYS) == [
         "away",
         "fan",
         "hvac_conditioning",
@@ -528,3 +528,51 @@ def test_a_single_entity_input_reads_the_first_of_several_stored(
 
     assert observation.value == 18
     assert observation.source_entity_id == "sensor.first"
+
+
+@pytest.mark.parametrize(
+    "unit", [None, "ppm"], ids=["no unit named", "not a percentage"]
+)
+def test_a_hygrometer_that_does_not_report_percent_is_unusable(
+    hass: HomeAssistant, unit: str | None
+) -> None:
+    """A fraction of 0.63 is inside every bound a percentage has."""
+    _set(hass, "sensor.rh", "0.63", {"unit_of_measurement": unit} if unit else {})
+
+    observation = _build(hass, shared={"outdoor_humidity": "sensor.rh"})[
+        "outdoor_humidity"
+    ]
+
+    assert observation.unusable_reason is UnusableReason.UNCONVERTIBLE
+
+
+@pytest.mark.parametrize(
+    ("state", "unit"),
+    [("-273.15", "°C"), ("-999", "°C"), ("-459.67", "°F"), ("-1", "K")],
+    ids=["absolute zero", "a sentinel", "absolute zero in Fahrenheit", "below zero K"],
+)
+def test_a_temperature_below_absolute_zero_is_unusable(
+    hass: HomeAssistant, state: str, unit: str
+) -> None:
+    """Nothing reads that cold, so it is a sentinel rather than a reading."""
+    _set(hass, "sensor.outside", state, {"unit_of_measurement": unit})
+
+    observation = _build(hass, shared={"outdoor_temperature": "sensor.outside"})[
+        "outdoor_temperature"
+    ]
+
+    assert observation.unusable_reason is UnusableReason.UNCONVERTIBLE
+
+
+def test_absolute_zero_is_measured_in_the_unit_the_house_reads_in(
+    hass: HomeAssistant,
+) -> None:
+    """-300°F is bitterly cold and perfectly possible; -300°C is not."""
+    hass.config.units = US_CUSTOMARY_SYSTEM
+    _set(hass, "sensor.outside", "-300", {"unit_of_measurement": "°F"})
+
+    observation = _build(hass, shared={"outdoor_temperature": "sensor.outside"})[
+        "outdoor_temperature"
+    ]
+
+    assert observation.value == -300
