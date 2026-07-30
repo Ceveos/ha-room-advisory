@@ -13,6 +13,7 @@ from custom_components.room_advisor.models import (
     Category,
     ConditionState,
     GroupObservation,
+    GuardState,
     Observation,
     Observations,
     UnusableReason,
@@ -589,3 +590,26 @@ def _with_windows() -> RecordingObservations:
             )
         }
     )
+
+
+def test_the_recorder_notices_a_guard_read_on_a_multi_entity_input() -> None:
+    """A group guard is answered without reaching `guard_when` or `groups`.
+
+    Every rule is checked for undeclared reads through this recorder, so a
+    read it cannot see is a read no rule test can catch.
+    """
+    obs = RecordingObservations(
+        {},
+        {
+            "window_contacts": GroupObservation(
+                key="window_contacts",
+                configured=("binary_sensor.window",),
+                known_on=("binary_sensor.window",),
+                known_off=(),
+                unusable=(),
+            )
+        },
+    )
+
+    assert obs.guard("window_contacts") is GuardState.BLOCKING
+    assert obs.keys_read == {"window_contacts"}
